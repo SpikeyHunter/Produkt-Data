@@ -358,4 +358,4 @@ process.on('SIGTERM', () => {
 // Keep-alive for Render.com (45-second interval)
 setInterval(() => { 
   console.log(`🔄 Keep-alive ping - ${new Date().toISOString()}`); 
-}, 45 * 1000); // 45 seconds
+}, 45 * 1000); // 45 seconds ping
