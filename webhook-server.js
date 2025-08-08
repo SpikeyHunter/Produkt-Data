@@ -338,16 +338,11 @@ app.use((req, res) => {
 // ==================== START SERVER ====================
 const server = app.listen(PORT, () => {
   console.log('═══════════════════════════════════════════');
-  console.log('     TIXR WEBHOOK SERVER - PRODUCTION');
+  console.log('     TIXR WEBHOOK SERVER');
   console.log('═══════════════════════════════════════════');
   console.log(`🚀 Server running on port ${PORT}`);
   console.log(`📡 Ready to receive webhooks at:`);
   console.log(`   POST /webhook/event`);
-  console.log('');
-  console.log('⚠️  SECURITY NOTICE:');
-  console.log('   Webhook signature verification is DISABLED');
-  console.log('   Tixr UI no longer supports custom headers');
-  console.log('   Consider IP whitelisting for additional security');
   console.log('═══════════════════════════════════════════');
 });
 
@@ -359,3 +354,8 @@ process.on('SIGTERM', () => {
     process.exit(0);
   });
 });
+
+// Keep-alive for Render.com (45-second interval)
+setInterval(() => { 
+  console.log(`🔄 Keep-alive ping - ${new Date().toISOString()}`); 
+}, 45 * 1000); // 45 seconds
