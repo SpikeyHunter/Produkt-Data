@@ -1,0 +1,24 @@
+name: Update Event Status
+
+on:
+  schedule:
+    # Run every hour at 5 past
+    - cron: '5 * * * *'
+  workflow_dispatch:
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+      - run: npm ci
+      - run: node sync-events.js status
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          TIXR_GROUP_ID: ${{ secrets.TIXR_GROUP_ID }}
+          TIXR_CPK: ${{ secrets.TIXR_CPK }}
+          TIXR_SECRET_KEY: ${{ secrets.TIXR_SECRET_KEY }}
