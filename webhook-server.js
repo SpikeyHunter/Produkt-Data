@@ -4,13 +4,7 @@ const axios = require('axios');
 const crypto = require('crypto');
 
 const app = express();
-
-// Capture raw body for signature verification
-app.use(express.json({
-  verify: (req, res, buf) => {
-    req.rawBody = buf.toString('utf-8');
-  }
-}));
+app.use(express.json());
 
 // Load environment variables
 if (process.env.NODE_ENV !== 'production') {
@@ -23,12 +17,14 @@ if (process.env.NODE_ENV !== 'production') {
 
 // Configuration
 const PORT = process.env.PORT || 3000;
-const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET;
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_KEY = process.env.SUPABASE_KEY;
 const GROUP_ID = process.env.TIXR_GROUP_ID || '980';
 const CPK = process.env.TIXR_CPK;
 const SECRET_KEY = process.env.TIXR_SECRET_KEY;
+
+// Optional: IP whitelist for additional security (Tixr's IPs if known)
+const ALLOWED_IPS = process.env.ALLOWED_IPS ? process.env.ALLOWED_IPS.split(',') : [];
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
 
@@ -184,7 +180,6 @@ function buildHash(basePath, paramsObj) {
   return { paramsSorted, hash };
 }
 
-// CRITICAL: Re-fetch full event data from Tixr API
 async function fetchTixrEventById(eventId) {
   const basePath = `/v1/groups/${GROUP_ID}/events/${eventId}`;
   const t = Date.now();
@@ -208,41 +203,49 @@ async function fetchTixrEventById(eventId) {
   }
 }
 
-// ==================== WEBHOOK MIDDLEWARE ====================
-function verifyWebhookSignature(req, res, next) {
-  if (!WEBHOOK_SECRET || WEBHOOK_SECRET === 'your-webhook-secret') {
-    console.warn('⚠️  Webhook signature verification skipped (no secret configured)');
-    return next();
+// ==================== SECURITY MIDDLEWARE (UPDATED) ====================
+function checkWebhookSecurity(req, res, next) {
+  // Get client IP (considering proxy headers from Render)
+  const clientIp = req.headers['x-forwarded-for']?.split(',')[0] || 
+                   req.connection.remoteAddress;
+  
+  // Log the incoming webhook details
+  console.warn('⚠️  UNVERIFIED WEBHOOK REQUEST');
+  console.warn(`   From IP: ${clientIp}`);
+  console.warn(`   User-Agent: ${req.headers['user-agent'] || 'Unknown'}`);
+  console.warn('   Note: Signature verification disabled - Tixr UI no longer supports custom headers');
+  
+  // Optional: IP whitelist check if configured
+  if (ALLOWED_IPS.length > 0) {
+    if (!ALLOWED_IPS.includes(clientIp)) {
+      console.error(`❌ Rejected webhook from unauthorized IP: ${clientIp}`);
+      return res.status(403).json({ error: 'Forbidden' });
+    }
+    console.log(`✓ IP ${clientIp} is whitelisted`);
   }
   
-  const signature = req.headers['x-tixr-signature'];
-  if (!signature) {
-    console.warn('⚠️  No signature header received');
-    return next();
-  }
-  
-  const expectedSignature = crypto
-    .createHmac('sha256', WEBHOOK_SECRET)
-    .update(req.rawBody)
-    .digest('hex');
-  
-  if (signature !== expectedSignature) {
-    console.error('❌ Invalid webhook signature');
-    return res.status(401).json({ error: 'Invalid signature' });
+  // Basic request validation
+  if (!req.body || typeof req.body !== 'object') {
+    console.error('❌ Invalid request body');
+    return res.status(400).json({ error: 'Invalid request body' });
   }
   
   next();
 }
 
 // ==================== WEBHOOK ENDPOINTS ====================
-app.post('/webhook/event', verifyWebhookSignature, async (req, res) => {
+app.post('/webhook/event', checkWebhookSecurity, async (req, res) => {
   const { event_id, action } = req.body;
   
-  if (!event_id || !action) {
-    return res.status(400).json({ error: 'Missing event_id or action' });
+  // Log full payload for debugging
+  console.log('📦 Webhook payload:', JSON.stringify(req.body, null, 2));
+  
+  if (!event_id) {
+    console.warn('⚠️  Webhook missing event_id, ignoring');
+    return res.status(200).json({ success: true, message: 'No event_id, ignored' });
   }
   
-  console.log(`\n📥 Webhook received: Action=${action}, EventID=${event_id}`);
+  console.log(`\n📥 Processing webhook: Action=${action || 'UPDATE'}, EventID=${event_id}`);
   
   try {
     // Handle removal actions
@@ -302,6 +305,7 @@ app.get('/health', (req, res) => {
   res.status(200).json({ 
     status: 'healthy',
     service: 'Tixr Webhook Server',
+    security: 'No signature verification (Tixr UI limitation)',
     timestamp: new Date().toISOString()
   });
 });
@@ -315,6 +319,7 @@ app.get('/', (req, res) => {
       'POST /webhook/event - Event updates from Tixr',
       'GET /health - Health check'
     ],
+    security_notice: 'Webhook signature verification disabled - Tixr UI does not support custom headers',
     timestamp: new Date().toISOString()
   });
 });
@@ -338,12 +343,12 @@ const server = app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
   console.log(`📡 Ready to receive webhooks at:`);
   console.log(`   POST /webhook/event`);
+  console.log('');
+  console.log('⚠️  SECURITY NOTICE:');
+  console.log('   Webhook signature verification is DISABLED');
+  console.log('   Tixr UI no longer supports custom headers');
+  console.log('   Consider IP whitelisting for additional security');
   console.log('═══════════════════════════════════════════');
-  
-  if (!WEBHOOK_SECRET || WEBHOOK_SECRET === 'your-webhook-secret') {
-    console.log('\n⚠️  WARNING: Webhook signature verification is disabled');
-    console.log('   Set WEBHOOK_SECRET environment variable for security');
-  }
 });
 
 // Graceful shutdown
