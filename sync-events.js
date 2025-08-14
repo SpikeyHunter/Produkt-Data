@@ -303,7 +303,7 @@ async function syncAllEvents() {
   }
 }
 
-// ==================== STATUS UPDATE FUNCTION ====================
+// ==================== STATUS UPDATE FUNCTION (FIXED) ====================
 async function updateStatuses() {
   console.log('🔄 Updating event statuses...');
   
@@ -321,29 +321,30 @@ async function updateStatuses() {
       return;
     }
     
-    const updates = [];
+    const eventsToUpdate = [];
     
     for (const event of liveEvents) {
       const status = computeEventStatus(event.event_date);
       
       if (status === 'PAST') {
-        updates.push({
-          event_id: event.event_id,
-          event_status: 'PAST',
-          event_updated: new Date().toISOString()
-        });
+        eventsToUpdate.push(event.event_id);
       }
     }
     
-    if (updates.length > 0) {
+    if (eventsToUpdate.length > 0) {
+      // Use UPDATE instead of UPSERT - this only updates existing records
       const { error: updateError } = await supabase
         .from('events')
-        .upsert(updates, { onConflict: 'event_id' });
+        .update({ 
+          event_status: 'PAST',
+          event_updated: new Date().toISOString()
+        })
+        .in('event_id', eventsToUpdate);
       
       if (updateError) {
         console.error('  ❌ Error updating statuses:', updateError);
       } else {
-        console.log(`  ✅ Updated ${updates.length} events to PAST`);
+        console.log(`  ✅ Updated ${eventsToUpdate.length} events to PAST`);
       }
     } else {
       console.log('  ✓ All statuses are correct');
