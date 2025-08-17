@@ -2,7 +2,7 @@ const { createClient } = require('@supabase/supabase-js');
 const axios = require('axios');
 const crypto = require('crypto');
 
-console.log('🚀 Starting Tixr Events Sync (FINAL PRODUCTION)...');
+console.log('🚀 Starting Tixr Events Sync (ENHANCED)...');
 
 // Load environment variables
 if (process.env.NODE_ENV !== 'production') {
@@ -29,7 +29,7 @@ if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY || !CPK || !SECRET_KEY) {
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
 
-// ==================== ARTIST EXTRACTION (Claude's Superior Logic) ====================
+// ==================== ARTIST EXTRACTION ====================
 const EXCLUDE_LIST = [
   "moet city", "moët city", "le grand prix", "prix", "mutek", "édition",
   "évènement spécial", "room202", "produktworld", "admission", "taraka",
@@ -64,16 +64,13 @@ function extractMainArtist(eventName) {
   if (!eventName || typeof eventName !== "string") return null;
   let name = eventName.trim();
   
-  // Priority to INCLUDE_LIST
   if (INCLUDE_LIST.some((w) => name.toLowerCase().includes(w))) {
     return toTitleCase(name.replace(/Takeover$/i, "").replace(/Night$/i, "").trim());
   }
   
-  // Clean prefixes
   name = name.replace(/^gp\d+[:\-\s]*/i, "");
   name = name.replace(/^(.+?)\s+(présente|présentent|presents?)\s+.+$/i, "$1");
   
-  // Split on artist delimiters
   const delimiters = [", ", " + ", " b2b ", " & ", " x ", " / ", " vs ", " v "];
   for (const delimiter of delimiters) {
     if (name.includes(delimiter)) {
@@ -82,30 +79,24 @@ function extractMainArtist(eventName) {
     }
   }
   
-  // Remove featuring/guests
   name = name.replace(/\s+(et invités|and guests?|avec|feat\.?|featuring|ft\.?|w\/)\s.*$/i, "");
   name = name.replace(/ *[\(\[].*?[\)\]] */g, " ");
-  
-  // Split on separators
   name = name.split("|")[0].split("-")[0].split(":")[0].split("@")[0].trim();
   
-  // Handle possessive
   if (/(\w+)'s\b/i.test(name)) {
     const match = name.match(/^(.+?)'s\b/i);
     if (match) name = match[1];
   }
   
-  // Remove event suffixes
   name = name.replace(/\b(tour(née)?|edition|montr[eé]al|takeover|night|experience|showcase|official|after\s?party|post-race)\b.*$/i, "");
   name = name.replace(/\b\d{4}\b/g, "").replace(/\d{5,}/g, "");
-  name = name.replace(/[-–—|•:]+$/g, "");
+  name = name.replace(/[-—–|•:]+$/g, "");
   name = name.replace(/^[^a-z0-9]+|[^a-z0-9]+$/gi, "");
   
   let main = toTitleCase(name.replace(/\s{2,}/g, " "));
   
   if (!main || !main.length) return null;
   
-  // Check exclusions
   const lowerMain = main.toLowerCase();
   const excludeRegex = new RegExp(`\\b(${EXCLUDE_LIST.join("|")})\\b`, "i");
   if (excludeRegex.test(lowerMain) && !INCLUDE_LIST.some((w) => lowerMain.includes(w))) {
@@ -118,7 +109,6 @@ function extractMainArtist(eventName) {
 }
 
 function extractArtistFromEvent(tixrEvent) {
-  // Priority 1: Lineups
   if (tixrEvent.lineups?.length > 0) {
     for (const lineup of tixrEvent.lineups) {
       if (lineup.acts?.length > 0) {
@@ -129,24 +119,17 @@ function extractArtistFromEvent(tixrEvent) {
       }
     }
   }
-  
-  // Priority 2: Parse from name
   return extractMainArtist(tixrEvent.name);
 }
 
-// ==================== STATUS LOGIC (LIVE/PAST ONLY with 4 AM rule) ====================
+// ==================== STATUS LOGIC ====================
 function computeEventStatus(eventDate) {
   const now = new Date();
-  
-  // Parse event date and set to start of day in Montreal time
   const eventStart = new Date(eventDate + 'T00:00:00');
-  
-  // ALWAYS use 4 AM next day as end time (per your requirement)
   const eventEnd = new Date(eventStart);
   eventEnd.setDate(eventEnd.getDate() + 1);
   eventEnd.setHours(4, 0, 0, 0);
   
-  // Simple comparison: if current time is past 4 AM next day, it's PAST
   return now > eventEnd ? 'PAST' : 'LIVE';
 }
 
@@ -155,7 +138,6 @@ function convertToMontrealDate(utcDateString) {
   if (!utcDateString) return null;
   const utcDate = new Date(utcDateString);
   
-  // Use en-CA locale for YYYY-MM-DD format
   return utcDate.toLocaleDateString("en-CA", {
     timeZone: "America/Montreal",
     year: "numeric",
@@ -207,7 +189,7 @@ async function fetchAllTixrEvents() {
         hasMorePages = false;
       } else {
         pageNumber++;
-        await new Promise(resolve => setTimeout(resolve, 250)); // Rate limiting
+        await new Promise(resolve => setTimeout(resolve, 250));
       }
       
     } catch (error) {
@@ -221,6 +203,22 @@ async function fetchAllTixrEvents() {
   return allEvents;
 }
 
+async function fetchTixrEventById(eventId) {
+  const basePath = `/v1/groups/${GROUP_ID}/events/${eventId}`;
+  const t = Date.now();
+  const params = { cpk: CPK, t };
+  const { paramsSorted, hash } = buildHash(basePath, params);
+  const url = `https://studio.tixr.com${basePath}?${paramsSorted}&hash=${hash}`;
+  
+  try {
+    const { data } = await axios.get(url, { timeout: 10000 });
+    return Array.isArray(data) ? data[0] : data;
+  } catch (error) {
+    console.error(`Error fetching event ${eventId}:`, error.message);
+    throw error;
+  }
+}
+
 // ==================== TRANSFORM EVENT FOR DATABASE ====================
 function transformEventForDB(tixrEvent) {
   const eventDate = convertToMontrealDate(tixrEvent.start_date);
@@ -228,9 +226,9 @@ function transformEventForDB(tixrEvent) {
   return {
     event_id: parseInt(tixrEvent.id),
     event_name: tixrEvent.name,
-    event_date: eventDate, // YYYY-MM-DD format
+    event_date: eventDate,
     event_artist: extractArtistFromEvent(tixrEvent),
-    event_status: computeEventStatus(eventDate), // LIVE or PAST only
+    event_status: computeEventStatus(eventDate),
     event_genre: null,
     event_flyer: tixrEvent.flyer_url || tixrEvent.mobile_image_url || null,
     event_tags: null,
@@ -242,12 +240,147 @@ function transformEventForDB(tixrEvent) {
   };
 }
 
+// ==================== CHANGE DETECTION FUNCTION ====================
+async function checkForEventChanges() {
+  console.log('\n🔍 Checking for event changes...');
+  const startTime = Date.now();
+  
+  try {
+    // Get current events from database
+    const { data: dbEvents, error: dbError } = await supabase
+      .from('events')
+      .select('event_id, event_name, event_date, event_flyer, event_status')
+      .order('event_id');
+    
+    if (dbError) throw dbError;
+    
+    // Create a map for quick lookup
+    const dbEventsMap = new Map();
+    dbEvents.forEach(event => {
+      dbEventsMap.set(event.event_id, event);
+    });
+    
+    // Fetch fresh data from Tixr
+    const tixrEvents = await fetchAllTixrEvents();
+    
+    const changes = {
+      new: [],
+      updated: [],
+      removed: [],
+      statusChanged: []
+    };
+    
+    // Check for new and updated events
+    for (const tixrEvent of tixrEvents) {
+      const eventId = parseInt(tixrEvent.id);
+      const dbEvent = dbEventsMap.get(eventId);
+      const freshEvent = transformEventForDB(tixrEvent);
+      
+      if (!dbEvent) {
+        // New event found
+        changes.new.push(freshEvent);
+        console.log(`  🆕 New event: ${freshEvent.event_name} (ID: ${eventId})`);
+      } else {
+        // Check for changes
+        const hasChanges = 
+          dbEvent.event_name !== freshEvent.event_name ||
+          dbEvent.event_date !== freshEvent.event_date ||
+          dbEvent.event_flyer !== freshEvent.event_flyer;
+        
+        const statusChanged = dbEvent.event_status !== freshEvent.event_status;
+        
+        if (hasChanges || statusChanged) {
+          changes.updated.push(freshEvent);
+          
+          if (statusChanged) {
+            changes.statusChanged.push({
+              id: eventId,
+              name: freshEvent.event_name,
+              oldStatus: dbEvent.event_status,
+              newStatus: freshEvent.event_status
+            });
+            console.log(`  🔄 Status change: ${freshEvent.event_name} (${dbEvent.event_status} → ${freshEvent.event_status})`);
+          }
+          
+          if (hasChanges) {
+            console.log(`  📝 Updated: ${freshEvent.event_name} (ID: ${eventId})`);
+          }
+        }
+        
+        // Remove from map to track removed events
+        dbEventsMap.delete(eventId);
+      }
+    }
+    
+    // Check for removed events (left in the map)
+    for (const [eventId, dbEvent] of dbEventsMap) {
+      changes.removed.push(eventId);
+      console.log(`  🗑️ Removed from Tixr: ${dbEvent.event_name} (ID: ${eventId})`);
+    }
+    
+    // Apply changes to database
+    if (changes.new.length > 0 || changes.updated.length > 0) {
+      const eventsToUpsert = [...changes.new, ...changes.updated];
+      
+      console.log(`\n💾 Applying ${eventsToUpsert.length} changes to database...`);
+      
+      // Upsert in batches
+      const batchSize = 100;
+      for (let i = 0; i < eventsToUpsert.length; i += batchSize) {
+        const batch = eventsToUpsert.slice(i, i + batchSize);
+        const { error } = await supabase
+          .from('events')
+          .upsert(batch, { onConflict: 'event_id' });
+        
+        if (error) {
+          console.error(`  ❌ Error saving batch:`, error.message);
+        } else {
+          console.log(`  ✓ Saved batch ${Math.floor(i/batchSize) + 1}/${Math.ceil(eventsToUpsert.length/batchSize)}`);
+        }
+      }
+    }
+    
+    // Remove deleted events
+    if (changes.removed.length > 0) {
+      console.log(`\n🗑️ Removing ${changes.removed.length} deleted events...`);
+      const { error } = await supabase
+        .from('events')
+        .delete()
+        .in('event_id', changes.removed);
+      
+      if (error) {
+        console.error('  ❌ Error removing events:', error.message);
+      } else {
+        console.log('  ✓ Events removed');
+      }
+    }
+    
+    // Summary
+    const duration = ((Date.now() - startTime) / 1000).toFixed(1);
+    console.log('\n📊 Change Detection Summary:');
+    console.log(`  New events: ${changes.new.length}`);
+    console.log(`  Updated events: ${changes.updated.length}`);
+    console.log(`  Status changes: ${changes.statusChanged.length}`);
+    console.log(`  Removed events: ${changes.removed.length}`);
+    console.log(`  Time taken: ${duration}s`);
+    
+    if (changes.new.length === 0 && changes.updated.length === 0 && changes.removed.length === 0) {
+      console.log('\n✅ All events are up to date!');
+    } else {
+      console.log('\n✅ Changes applied successfully!');
+    }
+    
+  } catch (error) {
+    console.error('❌ Error checking for changes:', error);
+    throw error;
+  }
+}
+
 // ==================== MAIN SYNC FUNCTION ====================
 async function syncAllEvents() {
   const startTime = Date.now();
   
   try {
-    // Test database connection
     console.log('🔌 Testing Supabase connection...');
     const { error: testError } = await supabase.from('events').select('count').limit(1);
     if (testError) {
@@ -256,18 +389,15 @@ async function syncAllEvents() {
     }
     console.log('✅ Supabase connected\n');
     
-    // Fetch all events
     const tixrEvents = await fetchAllTixrEvents();
     if (tixrEvents.length === 0) {
       console.log('No events to process. Exiting.');
       return;
     }
     
-    // Transform events
     console.log(`\n🔄 Transforming ${tixrEvents.length} events for database...`);
     const eventsToUpsert = tixrEvents.map(transformEventForDB).filter(Boolean);
     
-    // Count statuses
     const statusCounts = eventsToUpsert.reduce((acc, event) => {
       acc[event.event_status] = (acc[event.event_status] || 0) + 1;
       return acc;
@@ -277,7 +407,6 @@ async function syncAllEvents() {
     console.log(`   LIVE: ${statusCounts.LIVE || 0}`);
     console.log(`   PAST: ${statusCounts.PAST || 0}`);
     
-    // Save to database in batches
     console.log(`\n💾 Saving ${eventsToUpsert.length} events to Supabase...`);
     const batchSize = 100;
     
@@ -303,12 +432,11 @@ async function syncAllEvents() {
   }
 }
 
-// ==================== STATUS UPDATE FUNCTION (FIXED) ====================
+// ==================== STATUS UPDATE FUNCTION ====================
 async function updateStatuses() {
   console.log('🔄 Updating event statuses...');
   
   try {
-    // Get all LIVE events
     const { data: liveEvents, error } = await supabase
       .from('events')
       .select('event_id, event_date')
@@ -332,7 +460,6 @@ async function updateStatuses() {
     }
     
     if (eventsToUpdate.length > 0) {
-      // Use UPDATE instead of UPSERT - this only updates existing records
       const { error: updateError } = await supabase
         .from('events')
         .update({ 
@@ -359,9 +486,9 @@ async function updateStatuses() {
 async function main() {
   const command = process.argv[2] || 'sync';
   
-  console.log('═══════════════════════════════════════════');
-  console.log('     TIXR EVENTS SYNC - FINAL PRODUCTION');
-  console.log('═══════════════════════════════════════════\n');
+  console.log('╔══════════════════════════════════════╗');
+  console.log('║   TIXR EVENTS SYNC - ENHANCED       ║');
+  console.log('╚══════════════════════════════════════╝\n');
   
   switch (command) {
     case 'sync':
@@ -374,10 +501,24 @@ async function main() {
       await updateStatuses();
       break;
       
+    case 'check-changes':
+      // Check for any event changes (new, updated, removed)
+      await checkForEventChanges();
+      break;
+      
+    case 'status-and-changes':
+      // Combined: update statuses then check for changes
+      await updateStatuses();
+      console.log('\n' + '═'.repeat(40) + '\n');
+      await checkForEventChanges();
+      break;
+      
     default:
       console.log('Usage:');
-      console.log('  node sync-events.js sync   - Full sync of all events');
-      console.log('  node sync-events.js status - Update statuses only');
+      console.log('  node sync-events.js sync              - Full sync of all events');
+      console.log('  node sync-events.js status            - Update statuses only');
+      console.log('  node sync-events.js check-changes     - Check for event changes');
+      console.log('  node sync-events.js status-and-changes - Both status update and change check');
       process.exit(1);
   }
   

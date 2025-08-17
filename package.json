@@ -1,17 +1,20 @@
 {
   "name": "produkt-data",
-  "version": "1.0.0",
+  "version": "1.5.0",
+  "description": "Tixr Events Sync System with Webhooks",
   "main": "index.js",
   "scripts": {
     "start": "node webhook-server.js",
     "sync": "node sync-events.js sync",
     "status": "node sync-events.js status",
+    "check-changes": "node sync-events.js check-changes",
+    "update-all": "node sync-events.js status-and-changes",
+    "webhook": "node webhook-server.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "description": "",
   "dependencies": {
     "@supabase/supabase-js": "^2.54.0",
     "axios": "^1.11.0",

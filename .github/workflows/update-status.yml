@@ -1,4 +1,4 @@
-name: Update Event Status
+name: Update Event Status and Check Changes
 
 on:
   schedule:
@@ -15,7 +15,7 @@ jobs:
         with:
           node-version: '20'
       - run: npm ci
-      - run: node sync-events.js status
+      - run: node sync-events.js status-and-changes
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
