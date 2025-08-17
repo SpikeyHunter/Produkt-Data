@@ -1,0 +1,36 @@
+name: Sync Tixr Orders and Users
+
+on:
+  schedule:
+    # This runs the job every 5 minutes.
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+    # This adds a button in the GitHub Actions UI to run the job manually.
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      # Step 1: Check out your repository code
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      # Step 2: Set up the Node.js environment
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # Step 3: Install dependencies from your package.json
+      - name: Install dependencies
+        run: npm ci
+
+      # Step 4: Run your sync script
+      - name: Run Tixr Sync
+        run: node sync-orders.js
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          TIXR_GROUP_ID: ${{ secrets.TIXR_GROUP_ID }}
+          TIXR_CPK: ${{ secrets.TIXR_CPK }}
+          TIXR_SECRET_KEY: ${{ secrets.TIXR_SECRET_KEY }}
