@@ -1,0 +1,44 @@
+# The name of the workflow that will appear in the GitHub Actions tab
+name: Enrich Tixr Users
+
+on:
+  # Cron schedule to run at minute 0 of every 3rd hour
+  # (Runs at 00:00, 03:00, 06:00, 09:00, 12:00, 15:00, 18:00, 21:00 UTC)
+  schedule:
+    - cron: '0 */3 * * *'
+  
+  # Allows you to manually run the workflow from the Actions tab in GitHub
+  workflow_dispatch:
+
+jobs:
+  # The name of the job that will run
+  enrich-users:
+    # Use the latest version of Ubuntu as the operating system for the runner
+    runs-on: ubuntu-latest
+
+    steps:
+      # Step 1: Check out your repository's code so the runner can access it
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # Step 2: Set up the Node.js environment
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20' # Use a specific Long-Term Support (LTS) version of Node.js
+          cache: 'npm'      # Cache npm packages to speed up future runs
+
+      # Step 3: Install the project's dependencies
+      - name: Install dependencies
+        run: npm install
+
+      # Step 4: Run the user enrichment script
+      - name: Run user enrichment script
+        run: node enrich-users.js
+        env:
+          # These environment variables are securely pulled from your repository's secrets
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          TIXR_GROUP_ID: ${{ secrets.TIXR_GROUP_ID }}
+          TIXR_CPK: ${{ secrets.TIXR_CPK }}
+          TIXR_SECRET_KEY: ${{ secrets.TIXR_SECRET_KEY }}
