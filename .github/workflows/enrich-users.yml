@@ -2,10 +2,9 @@
 name: Enrich Tixr Users
 
 on:
-  # Cron schedule to run at minute 0 of every 3rd hour
-  # (Runs at 00:00, 03:00, 06:00, 09:00, 12:00, 15:00, 18:00, 21:00 UTC)
+  #every 6 hours
   schedule:
-    - cron: '0 */3 * * *'
+  - cron: '0 */6 * * *'
   
   # Allows you to manually run the workflow from the Actions tab in GitHub
   workflow_dispatch:

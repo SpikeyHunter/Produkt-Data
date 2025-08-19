@@ -1,0 +1,34 @@
+# .github/workflows/sync-sales.yml
+
+name: 📈 Sync Event Sales Data
+
+on:
+  # Allows you to run this workflow manually from the Actions tab
+  workflow_dispatch:
+
+  # Runs the job on a schedule
+  schedule:
+    # This runs the workflow every 6 hours
+    - cron: "0 */6 * * *"
+
+jobs:
+  sync-sales:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: ⬇️ Check out repository code
+        uses: actions/checkout@v4
+
+      - name: 🟢 Set up Node.js environment
+        uses: actions/setup-node@v4
+        with:
+          node-version: "18"
+
+      - name: 📦 Install dependencies
+        run: npm install @supabase/supabase-js dotenv
+
+      - name: 🚀 Run the sales sync script
+        run: node sync-sales.js
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
