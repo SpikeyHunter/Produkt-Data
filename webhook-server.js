@@ -215,7 +215,3 @@ const server = app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}, ready for webhooks.`);
   console.log('═══════════════════════════════════════════');
 });
-
-setInterval(() => { 
-  console.log(`🔄 Keep-alive ping - ${new Date().toISOString()}`); 
-}, 45 * 1000); // 45 seconds ping
