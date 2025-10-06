@@ -3,7 +3,7 @@ const axios = require('axios');
 const crypto = require('crypto');
 require('dotenv').config();
 
-console.log('🚀 Starting Tixr Sync (Anti-Deadlock Version)...');
+console.log('🚀 Starting Tixr Order Sync Script (Final Version)...');
 
 // --- CONFIGURATION ---
 const {
@@ -14,7 +14,7 @@ const {
   TIXR_SECRET_KEY
 } = process.env;
 
-const MAX_CONCURRENT_EVENTS = 10;
+const MAX_CONCURRENT_EVENTS = 10; 
 const ORDER_FETCH_PAGE_SIZE = 100;
 const DB_UPSERT_BATCH_SIZE = 500;
 
@@ -71,10 +71,11 @@ async function fetchAllOrdersForEvent(eventId) {
     const allOrders = []; let pageNumber = 1; let hasMorePages = true;
     while(hasMorePages) {
         const basePath = `/v1/groups/${TIXR_GROUP_ID}/events/${eventId}/orders`;
-        // --- MODIFICATION --- Removed the 'status' filter to fetch ALL orders.
         const params = { cpk: TIXR_CPK, t: Date.now(), page_number: pageNumber, page_size: ORDER_FETCH_PAGE_SIZE, start_date: '2010-01-01' };
+        
+        const paramsString = Object.keys(params).sort().map(k=>`${k}=${encodeURIComponent(params[k])}`).join('&');
         const hash = buildHash(basePath, params);
-        const paramsString = Object.keys(params).map(k=>`${k}=${encodeURIComponent(params[k])}`).join('&');
+
         const url = `${TIXR_API_BASE_URL}${basePath}?${paramsString}&hash=${hash}`;
         try {
             const { data } = await axios.get(url, { timeout: 20000 });
@@ -109,24 +110,13 @@ async function syncEventData(event) {
   
   const transformedOrders = rawOrders.flatMap(order => 
     (order.sale_items || []).map(item => ({
-      order_id: order.order_id, 
-      event_id: order.event_id, 
-      order_sale_id: item.sale_id, 
-      // --- MODIFICATION --- Added the order_status field.
-      order_status: order.status,
-      order_tier_id: item.tier_id,
-      order_user_id: order.user_id, 
+      order_id: order.order_id, event_id: order.event_id, order_sale_id: item.sale_id,
+      order_status: order.status, order_tier_id: item.tier_id, order_user_id: order.user_id,
       order_name: `${capitalize(order.first_name) || ''} ${capitalize(order.lastname) || ''}`.trim(),
-      order_sales_item_name: item.name, 
-      order_category: item.category, 
-      order_quantity: item.quantity,
-      order_purchase_date: new Date(order.purchase_date).toISOString(), 
-      order_gross: order.gross_sales, 
-      order_net: order.net,
-      order_user_agent: order.user_agent_type, 
-      order_card_type: order.card_type, 
-      order_ref: order.ref_id,
-      order_ref_type: order.ref_type, 
+      order_sales_item_name: item.name, order_category: item.category, order_quantity: item.quantity,
+      order_purchase_date: new Date(order.purchase_date).toISOString(), order_gross: order.gross_sales,
+      order_net: order.net, order_user_agent: order.user_agent_type, order_card_type: order.card_type,
+      order_ref: order.ref_id, order_ref_type: order.ref_type,
       order_serials: item.tickets?.map(t => t.serial_number).join(',') || null,
     }))
   );
@@ -135,13 +125,15 @@ async function syncEventData(event) {
 
   const userOrderMap = new Map();
   for (const order of rawOrders) {
-    if (order.user_id && !userOrderMap.has(order.user_id.toString())) {
-        userOrderMap.set(order.user_id.toString(), order);
+    if (order.user_id) {
+        const userIdStr = order.user_id.toString();
+        if (!userOrderMap.has(userIdStr) || order.purchase_date > userOrderMap.get(userIdStr).purchase_date) {
+            userOrderMap.set(userIdStr, order);
+        }
     }
   }
 
   await supabase.from('events').update({ event_order_updated: new Date().toISOString() }).eq('event_id', event.event_id);
-
   return userOrderMap;
 }
 
@@ -154,7 +146,7 @@ function shouldSyncEvent(event) {
     const eventDate = new Date(event.event_date);
     const cutoffDate = new Date(eventDate);
     cutoffDate.setDate(cutoffDate.getDate() + 1);
-    cutoffDate.setHours(4, 0, 0, 0);
+    cutoffDate.setHours(4, 0, 0, 0); // ~4am the day after the event
     const lastUpdateDate = new Date(event.event_order_updated);
     return lastUpdateDate < cutoffDate;
   }
@@ -177,7 +169,6 @@ async function runFullSync() {
   console.log(`➡️  ${eventsToProcess.length} events require syncing. Starting parallel processing...`);
 
   const progressBar = new ProgressBar(eventsToProcess.length);
-  
   const allUserMaps = await Promise.all(eventsToProcess.map(event => 
     eventLimiter.execute(async () => {
         const userMap = await syncEventData(event);
@@ -191,45 +182,48 @@ async function runFullSync() {
   const masterUserOrderMap = new Map();
   for (const userMap of allUserMaps) {
       for (const [userId, order] of userMap.entries()) {
-          if (!masterUserOrderMap.has(userId)) {
+           if (!masterUserOrderMap.has(userId) || order.purchase_date > masterUserOrderMap.get(userId).purchase_date) {
               masterUserOrderMap.set(userId, order);
           }
       }
   }
-  const allUniqueUserIds = Array.from(masterUserOrderMap.keys());
-  console.log(`- Found ${allUniqueUserIds.length} unique users across all events.`);
 
-  const { data: existingUsers } = await supabase.from('events_users').select('user_id, event_ids').in('user_id', allUniqueUserIds);
+  const userIdsInSync = Array.from(masterUserOrderMap.keys());
+  const { data: existingUsers } = await supabase.from('events_users').select('user_id, event_ids').in('user_id', userIdsInSync);
   const existingUserEventMap = new Map((existingUsers || []).map(u => [u.user_id.toString(), u.event_ids || []]));
 
   const usersToUpsert = Array.from(masterUserOrderMap.values()).map(order => {
     const userIdStr = order.user_id.toString();
     const geoInfo = order.geo_info;
-    const existingEvents = existingUserEventMap.get(userIdStr) || [];
     
-    const allAttendedEvents = allUserMaps.flatMap(userMap => 
-        userMap.has(userIdStr) ? [userMap.get(userIdStr).event_id] : []
-    );
+    const allAttendedEventsForUser = allUserMaps.flatMap(userMap => 
+        Array.from(userMap.values())
+            .filter(o => o.user_id.toString() === userIdStr)
+            .map(o => o.event_id)
+    ).filter(Boolean);
+      
+    const existingEvents = existingUserEventMap.get(userIdStr) || [];
+    const updatedEvents = Array.from(new Set([...existingEvents, ...allAttendedEventsForUser]));
 
-    const updatedEvents = Array.from(new Set([...existingEvents, ...allAttendedEvents]));
-
+    // This object ONLY updates the information we get directly from the order.
+    // It will NOT overwrite fields managed by enrich-users.js (like age, gender, total_spend).
     return {
         user_id: userIdStr,
         user_first_name: capitalize(order.first_name),
         user_last_name: capitalize(order.lastname),
         user_mail: order.email,
-        user_opt_in: order.opt_in,
         user_city: geoInfo?.city,
         user_state: geoInfo?.state,
         user_country: geoInfo?.country_code,
         user_postal: geoInfo?.postal_code,
         event_ids: updatedEvents,
-        user_birth_date: null, user_age: null, user_gender: null, user_total_spend: null,
-        user_tickets_purchased: null, user_last_purchase: null,
+        // ** IMPORTANT CHANGE **
+        // Update the last purchase date. This is the trigger for the enrichment script.
+        user_last_purchase: new Date(order.purchase_date).toISOString(),
       };
   });
 
-  console.log(`- Saving ${usersToUpsert.length} user profiles to the database...`);
+  console.log(`- Saving/updating ${usersToUpsert.length} user profiles to the database...`);
   await saveBatchToDB('events_users', usersToUpsert, 'user_id');
 
   const duration = (Date.now() - startTime) / 1000;
@@ -246,3 +240,4 @@ main().catch(err => {
     console.error("\n❌ A fatal error occurred:", err);
     process.exit(1);
 });
+
