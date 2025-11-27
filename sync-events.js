@@ -308,15 +308,16 @@ function transformEventForDB(tixrEvent) {
 }
 
 // ==================== CHANGE DETECTION FUNCTION ====================
+// ==================== CHANGE DETECTION FUNCTION ====================
 async function checkForEventChanges() {
   console.log("\n🔍 Checking for event changes...");
   const startTime = Date.now();
 
   try {
-    // Get current events from database
+    // Get current events from database (ADDED: is_custom)
     const { data: dbEvents, error: dbError } = await supabase
       .from("events")
-      .select("event_id, event_name, event_date, event_flyer, event_status")
+      .select("event_id, event_name, event_date, event_flyer, event_status, is_custom")
       .order("event_id");
 
     if (dbError) throw dbError;
@@ -387,10 +388,11 @@ async function checkForEventChanges() {
 
     // Check for removed events (left in the map)
     for (const [eventId, dbEvent] of dbEventsMap) {
-      // 🛡️ PROTECT CUSTOM EVENTS: If ID is less than 10,000, do not delete it.
-      if (eventId < 10000) {
-        // console.log(`  🛡️ Ignoring custom event: ${dbEvent.event_name} (ID: ${eventId})`);
-        continue;
+      // 🛡️ PROTECT CUSTOM EVENTS: 
+      // If ID is less than 10,000 OR is_custom is set to true, do not delete it.
+      if (eventId < 10000 || dbEvent.is_custom === true) {
+         // console.log(`  🛡️ Ignoring custom event: ${dbEvent.event_name} (ID: ${eventId})`);
+         continue;
       }
 
       changes.removed.push(eventId);

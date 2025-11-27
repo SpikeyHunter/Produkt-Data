@@ -30,11 +30,12 @@ async function syncEventSales() {
 
   try {
     // 1. Fetch all events and existing sales records in parallel
+    // (ADDED: is_custom to the select list)
     const [
       { data: allEvents, error: eventsError },
       { data: existingSales, error: salesError }
     ] = await Promise.all([
-      supabase.from('events').select('event_id, event_status'),
+      supabase.from('events').select('event_id, event_status, is_custom'), 
       supabase.from('events_sales').select('event_id')
     ]);
 
@@ -45,6 +46,9 @@ async function syncEventSales() {
 
     // 2. Determine which events actually need to be processed
     const eventsToProcess = allEvents.filter(event => {
+      // 🛡️ IMMEDIATELY SKIP CUSTOM EVENTS
+      if (event.is_custom === true) return false; 
+
       if (event.event_status === 'LIVE') return true;
       if (event.event_status === 'PAST') return !existingSaleIds.has(event.event_id);
       return false;
