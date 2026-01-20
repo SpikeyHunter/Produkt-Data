@@ -6,7 +6,7 @@ require('dotenv').config();
 
 console.log('🚀 Starting Tixr All-in-One Webhook Server...');
 
-// --- CONFIGURATION ---
+// --- CONFIGURATION ------
 const PORT = process.env.PORT || 3000;
 const {
   SUPABASE_URL,

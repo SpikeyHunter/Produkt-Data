@@ -2,7 +2,7 @@ name: Update Event Status and Check Changes
 
 on:
   schedule:
-    # Run once a day 
+    # Run once a day hours
     - cron: "0 8 * * *"
   workflow_dispatch:
 

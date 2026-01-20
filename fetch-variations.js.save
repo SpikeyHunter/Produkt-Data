@@ -1,0 +1,78 @@
+node fetch-variations.const { createClient } = require('@supabase/supabase-js');
+require('dotenv').config();
+
+const { SUPABASE_URL, SUPABASE_KEY } = process.env;
+const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
+
+async function fetchAllVariations() {
+  console.log("🚀 Starting Full Scan of Ticket Variations...");
+  
+  const uniqueVariations = {};
+  let page = 0;
+  const pageSize = 1000;
+  let hasMore = true;
+  let totalScanned = 0;
+
+  // 1. Fetch all data in batches
+  while (hasMore) {
+    const { data: orders, error } = await supabase
+      .from('events_orders')
+      .select('order_sales_item_name, order_category, order_gross, order_ref_type')
+      .range(page * pageSize, (page + 1) * pageSize - 1);
+
+    if (error) {
+      console.error("❌ DB Error:", error.message);
+      break;
+    }
+
+    if (!orders || orders.length === 0) {
+      hasMore = false;
+      break;
+    }
+
+    // 2. Group by unique combination
+    orders.forEach(o => {
+      // Create a unique signature for this ticket type
+      // We treat NULLs as "N/A" to keep the grouping clean
+      const name = o.order_sales_item_name || "[NO NAME]";
+      const category = o.order_category || "[NO CAT]";
+      const price = parseFloat(o.order_gross || 0).toFixed(2); // Standardize price to 2 decimals
+      const ref = o.order_ref_type || "[NO REF]";
+
+      const key = `${name}|${category}|${price}|${ref}`;
+      
+      if (!uniqueVariations[key]) {
+        uniqueVariations[key] = {
+          Name: name,
+          Category: category,
+          Price: price,
+          Backend_Ref: ref,
+          Count: 0
+        };
+      }
+      uniqueVariations[key].Count++;
+    });
+
+    totalScanned += orders.length;
+    process.stdout.write(`\r🔍 Scanned: ${totalScanned} items...`);
+    page++;
+  }
+
+  console.log(`\n\n✅ Scan Complete. Found ${Object.keys(uniqueVariations).length} unique variations.`);
+  console.log("====================================================================================================");
+  console.log(`| ${"COUNT".padEnd(6)} | ${"PRICE".padEnd(8)} | ${"CATEGORY".padEnd(15)} | ${"BACKEND REF".padEnd(15)} | ${"TICKET NAME"}`);
+  console.log("====================================================================================================");
+
+  // 3. Sort by Count (Highest first) and Print
+  const sortedList = Object.values(uniqueVariations).sort((a, b) => b.Count - a.Count);
+
+  sortedList.forEach(v => {
+    console.log(
+      `| ${v.Count.toString().padEnd(6)} | $${v.Price.padEnd(7)} | ${v.Category.substring(0,14).padEnd(15)} | ${v.Backend_Ref.substring(0,14).padEnd(15)} | ${v.Name}`
+    );
+  });
+
+  console.log("====================================================================================================");
+}
+
+fetchAllVariations();

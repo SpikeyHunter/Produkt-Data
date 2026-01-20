@@ -4,7 +4,7 @@ const crypto = require("crypto");
 
 console.log("🚀 Starting Tixr Events Sync (ENHANCED)...");
 
-// Load environment variables
+// Load environment variablesInputs
 if (process.env.NODE_ENV !== "production") {
   try {
     require("dotenv").config();

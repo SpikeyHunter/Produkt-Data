@@ -2,7 +2,7 @@
 const { createClient } = require('@supabase/supabase-js');
 require('dotenv').config();
 
-// --- CONFIGURATION ---
+// --- CONFIGURATION ---Inputs
 const { SUPABASE_URL, SUPABASE_KEY } = process.env;
 
 if (!SUPABASE_URL || !SUPABASE_KEY) {

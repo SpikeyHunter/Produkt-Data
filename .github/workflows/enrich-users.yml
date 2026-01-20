@@ -2,7 +2,7 @@
 name: Enrich Tixr Users
 
 on:
-  #every 6 hours
+  #every 6 hourshours
   schedule:
   - cron: '0 */6 * * *'
   
