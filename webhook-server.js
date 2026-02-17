@@ -6,7 +6,7 @@ require('dotenv').config();
 
 console.log('🚀 Starting Tixr All-in-One Webhook Server...');
 
-// --- CONFIGURATION ------
+// --- CONFIGURATION ---
 const PORT = process.env.PORT || 3000;
 const {
   SUPABASE_URL,
@@ -82,16 +82,6 @@ function checkWebhookSecurity(req, res, next) {
 }
 
 // ==================== EVENT PROCESSING LOGIC ====================
-// (Brought in from your sync-events.js file for a self-contained server)
-
-function computeEventStatus(eventDate) {
-  const now = new Date();
-  const eventStart = new Date(eventDate + 'T00:00:00');
-  const eventEnd = new Date(eventStart);
-  eventEnd.setDate(eventEnd.getDate() + 1);
-  eventEnd.setHours(4, 0, 0, 0);
-  return now > eventEnd ? 'PAST' : 'LIVE';
-}
 
 function convertToMontrealDate(utcDateString) {
   if (!utcDateString) return null;
@@ -105,10 +95,64 @@ function transformEventForDB(tixrEvent) {
     event_id: parseInt(tixrEvent.id),
     event_name: tixrEvent.name,
     event_date: eventDate,
-    event_status: computeEventStatus(eventDate),
     event_flyer: tixrEvent.flyer_url || tixrEvent.mobile_image_url || null,
     event_updated: new Date().toISOString(),
+    // ⚠️ NOTE: event_status is intentionally excluded here so we don't overwrite your external LIVE/PAST logic.
   };
+}
+
+// ==================== REAL-TIME SALES AGGREGATION ====================
+
+async function updateEventSalesAggregate(eventId) {
+    console.log(`  📊 Recalculating real-time sales aggregate for Event ID: ${eventId}...`);
+
+    // Fetch COMPLETE orders for this event
+    const { data: orders, error: fetchError } = await supabase
+        .from('events_orders')
+        .select('order_category, order_net, order_ref_type, order_gross, order_quantity, order_sales_item_name')
+        .eq('event_id', eventId)
+        .eq('order_status', 'COMPLETE');
+
+    if (fetchError) {
+        console.error(`  ❌ Failed to fetch orders for aggregation:`, fetchError.message);
+        return;
+    }
+
+    const sumQty = (filteredOrders) => filteredOrders.reduce((sum, o) => sum + (o.order_quantity || 0), 0);
+    const safeUpper = (str) => (str || '').toUpperCase();
+
+    const salesData = {
+        event_id: eventId,
+        sales_total_ga: sumQty(orders.filter(o => o.order_category === 'GA' && o.order_gross > 0)),
+        sales_total_vip: sumQty(orders.filter(o => o.order_category === 'VIP' && o.order_gross > 0)),
+        sales_total_coatcheck: sumQty(orders.filter(o => o.order_category === 'OUTLET' && o.order_gross > 0)),
+        sales_total_tables: sumQty(orders.filter(o => (o.order_category === 'TABLE_SERVICE' || o.order_category === 'TABLE') && o.order_gross > 0)),
+        sales_total_comp_ga: sumQty(orders.filter(o => o.order_category === 'GA' && o.order_gross === 0 && safeUpper(o.order_ref_type) === 'BACKSTAGE' && safeUpper(o.order_sales_item_name).includes('COMP'))),
+        sales_total_comp_vip: sumQty(orders.filter(o => o.order_category === 'VIP' && o.order_gross === 0 && safeUpper(o.order_ref_type) === 'BACKSTAGE' && safeUpper(o.order_sales_item_name).includes('COMP'))),
+        sales_total_free_ga: sumQty(orders.filter(o => o.order_category === 'GA' && o.order_gross === 0 && safeUpper(o.order_ref_type) !== 'BACKSTAGE')),
+        sales_total_free_vip: sumQty(orders.filter(o => o.order_category === 'VIP' && o.order_gross === 0 && safeUpper(o.order_ref_type) !== 'BACKSTAGE')),
+        sales_gross: orders.reduce((sum, o) => sum + (o.order_gross || 0), 0),
+        sales_net: orders.reduce((sum, o) => sum + (o.order_net || 0), 0)
+    };
+
+    // Upsert into events_sales
+    const { error: upsertError } = await supabase
+        .from('events_sales')
+        .upsert(salesData, { onConflict: 'event_id' });
+
+    if (upsertError) {
+        console.error(`  ❌ Failed to update events_sales:`, upsertError.message);
+        return;
+    }
+
+    // Update timestamps on the event
+    const { error: timestampError } = await supabase
+        .from('events')
+        .update({ event_sales_updated: new Date().toISOString() })
+        .eq('event_id', eventId);
+
+    if (timestampError) console.error(`  ❌ Failed to update events timestamp:`, timestampError.message);
+    else console.log(`  ✅ Successfully updated real-time sales for Event ${eventId}.`);
 }
 
 // ==================== WEBHOOK ENDPOINTS ====================
@@ -194,7 +238,10 @@ app.post('/webhook/order', checkWebhookSecurity, async (req, res) => {
             console.log(`  👥 Synced user profile for ${userPayload.user_first_name} ${userPayload.user_last_name}.`);
         }
         
-        res.status(200).json({ success: true, message: 'Order synced' });
+        // 🔥 Trigger real-time sales aggregation 
+        await updateEventSalesAggregate(fullOrder.event_id);
+        
+        res.status(200).json({ success: true, message: 'Order synced and sales aggregated' });
 
     } catch (error) {
         console.error(`  ❌ Error processing order webhook:`, error.message);

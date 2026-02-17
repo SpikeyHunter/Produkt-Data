@@ -2,8 +2,8 @@ name: Sync Tixr Orders and Users
 
 on:
   schedule:
-    # This runs the job every 5 minutes.hours
-    - cron: '*/5 * * * *'
+    # This runs the job every 2hours
+    - cron: '0 */2 * * *'
   workflow_dispatch:
     # This adds a button in the GitHub Actions UI to run the job manually.
 
