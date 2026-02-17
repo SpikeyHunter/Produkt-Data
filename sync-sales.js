@@ -15,6 +15,7 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 const sumOrderQuantity = (orders) => {
   return orders.reduce((sum, order) => sum + (order.order_quantity || 0), 0);
 };
+
 const safeUpper = (str) => (str || '').toUpperCase();
 
 /**
@@ -63,6 +64,8 @@ async function syncEventSales() {
       let hasMore = true;
 
       while(hasMore) {
+        // We filter for 'COMPLETE' at the database level for maximum speed, 
+        // but we will still enforce it in the JS filters below per requirements.
         const { data: orders, error } = await supabase
             .from('events_orders')
             .select('order_category, order_net, order_ref_type, order_gross, order_quantity, order_sales_item_name, order_status')
@@ -84,16 +87,74 @@ async function syncEventSales() {
         }
       }
 
+      // --- APPLY STRICT CLASSIFICATION RULES ---
       return {
         event_id: event.event_id,
-        sales_total_ga: sumOrderQuantity(allOrders.filter(o => o.order_category === 'GA' && o.order_gross > 0)),
-        sales_total_vip: sumOrderQuantity(allOrders.filter(o => o.order_category === 'VIP' && o.order_gross > 0)),
-        sales_total_coatcheck: sumOrderQuantity(allOrders.filter(o => o.order_category === 'OUTLET' && o.order_gross > 0)),
-        sales_total_tables: sumOrderQuantity(allOrders.filter(o => (o.order_category === 'TABLE_SERVICE' || o.order_category === 'TABLE') && o.order_gross > 0)),
-        sales_total_comp_ga: sumOrderQuantity(allOrders.filter(o => o.order_category === 'GA' && o.order_gross === 0 && safeUpper(o.order_ref_type) === 'BACKSTAGE' && safeUpper(o.order_sales_item_name).includes('COMP'))),
-        sales_total_comp_vip: sumOrderQuantity(allOrders.filter(o => o.order_category === 'VIP' && o.order_gross === 0 && safeUpper(o.order_ref_type) === 'BACKSTAGE' && safeUpper(o.order_sales_item_name).includes('COMP'))),
-        sales_total_free_ga: sumOrderQuantity(allOrders.filter(o => o.order_category === 'GA' && o.order_gross === 0 && safeUpper(o.order_ref_type) !== 'BACKSTAGE')),
-        sales_total_free_vip: sumOrderQuantity(allOrders.filter(o => o.order_category === 'VIP' && o.order_gross === 0 && safeUpper(o.order_ref_type) !== 'BACKSTAGE')),
+        
+        // GA: order_category = GA and order_gross > 0 and order_status = COMPLETE
+        sales_total_ga: sumOrderQuantity(allOrders.filter(o => 
+          o.order_category === 'GA' && 
+          o.order_gross > 0 && 
+          o.order_status === 'COMPLETE'
+        )),
+        
+        // VIP: order_category = VIP and order_gross > 0 and order_status = COMPLETE
+        sales_total_vip: sumOrderQuantity(allOrders.filter(o => 
+          o.order_category === 'VIP' && 
+          o.order_gross > 0 && 
+          o.order_status === 'COMPLETE'
+        )),
+        
+        // COMP GA: order_category = GA, order_gross = 0, status = COMPLETE, ref = BACKSTAGE
+        sales_total_comp_ga: sumOrderQuantity(allOrders.filter(o => 
+          o.order_category === 'GA' && 
+          o.order_gross === 0 && 
+          o.order_status === 'COMPLETE' && 
+          safeUpper(o.order_ref_type) === 'BACKSTAGE'
+        )),
+        
+        // COMP VIP: order_category = VIP, order_gross = 0, status = COMPLETE, ref = BACKSTAGE
+        sales_total_comp_vip: sumOrderQuantity(allOrders.filter(o => 
+          o.order_category === 'VIP' && 
+          o.order_gross === 0 && 
+          o.order_status === 'COMPLETE' && 
+          safeUpper(o.order_ref_type) === 'BACKSTAGE'
+        )),
+        
+        // COATCHECK: order_category = OUTLET, order_gross > 0, status = COMPLETE, name contains Vestiaire/Coat Check
+        sales_total_coatcheck: sumOrderQuantity(allOrders.filter(o => {
+          const nameUpper = safeUpper(o.order_sales_item_name);
+          const isCoatCheckName = nameUpper.includes('VESTIA') || nameUpper.includes('COAT CHECK') || nameUpper.includes('COATCHECK');
+          return o.order_category === 'OUTLET' && 
+                 o.order_gross > 0 && 
+                 o.order_status === 'COMPLETE' && 
+                 isCoatCheckName;
+        })),
+
+        // FREE GA: order_category = GA, order_gross = 0, status = COMPLETE, ref IS NOT BACKSTAGE
+        sales_total_free_ga: sumOrderQuantity(allOrders.filter(o => 
+          o.order_category === 'GA' && 
+          o.order_gross === 0 && 
+          o.order_status === 'COMPLETE' && 
+          safeUpper(o.order_ref_type) !== 'BACKSTAGE'
+        )),
+        
+        // FREE VIP: order_category = VIP, order_gross = 0, status = COMPLETE, ref IS NOT BACKSTAGE
+        sales_total_free_vip: sumOrderQuantity(allOrders.filter(o => 
+          o.order_category === 'VIP' && 
+          o.order_gross === 0 && 
+          o.order_status === 'COMPLETE' && 
+          safeUpper(o.order_ref_type) !== 'BACKSTAGE'
+        )),
+
+        // TABLES (Retained from previous setup to prevent DB nulls)
+        sales_total_tables: sumOrderQuantity(allOrders.filter(o => 
+          (o.order_category === 'TABLE_SERVICE' || o.order_category === 'TABLE') && 
+          o.order_gross > 0 && 
+          o.order_status === 'COMPLETE'
+        )),
+
+        // Financials
         sales_gross: allOrders.reduce((sum, o) => sum + (o.order_gross || 0), 0),
         sales_net: allOrders.reduce((sum, o) => sum + (o.order_net || 0), 0),
       };
