@@ -1,7 +1,7 @@
 // sync-sales.js
 const { createClient } = require('@supabase/supabase-js');
 require('dotenv').config();
-
+// Comment
 // --- CONFIGURATION ---
 const { SUPABASE_URL, SUPABASE_KEY } = process.env;
 

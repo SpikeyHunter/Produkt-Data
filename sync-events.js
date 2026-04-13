@@ -3,7 +3,7 @@ const axios = require("axios");
 const crypto = require("crypto");
 
 console.log("🚀 Starting Tixr Events Sync (ENHANCED)...");
-
+// Comment
 // Load environment variablesInputs
 if (process.env.NODE_ENV !== "production") {
   try {

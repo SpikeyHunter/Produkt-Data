@@ -2,7 +2,7 @@ require('dotenv').config();
 const { createClient } = require('@supabase/supabase-js');
 const axios = require('axios');
 const crypto = require('crypto');
-
+// Comment
 // --- CONFIGURATION ---
 const CONFIG = {
     // DB Config

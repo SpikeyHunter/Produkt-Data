@@ -3,7 +3,7 @@
 name: 📈 Sync Event Sales Data
 
 on:
-  # Allows you to run this workflow manually from the Actions tab
+  # Allows you to run this workflow manually from the Actions taba 
   workflow_dispatch:
 
   # Runs the job on a schedule
