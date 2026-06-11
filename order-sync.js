@@ -16,7 +16,7 @@ const TIXR_API_BASE = `https://studio.tixr.com/v1/groups/${TIXR_GROUP_ID}`;
 
 // =========================================================
 //  THE CLASSIFICATION ENGINE
-// =========================================================
+// ========================================================
 function getReportingCategory(item, refType, gross) {
   const name = (item.name || "").toUpperCase();
   const category = (item.category || "").toUpperCase();

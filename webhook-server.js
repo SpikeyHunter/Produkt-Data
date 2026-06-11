@@ -26,7 +26,7 @@ const TIXR_API_BASE_URL = 'https://studio.tixr.com';
 const app = express();
 app.use(express.json());
 
-// ==================== SHARED HELPER FUNCTIONS ====================
+// ================== SHARED HELPER FUNCTIONS ====================
 
 function buildHash(basePath, paramsObj) {
   const paramsSorted = Object.keys(paramsObj).sort().map(k => `${k}=${encodeURIComponent(paramsObj[k])}`).join('&');

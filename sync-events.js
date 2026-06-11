@@ -31,7 +31,7 @@ if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY || !CPK || !SECRET_KEY) {
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
 
-// ==================== ARTIST EXTRACTION ====================
+// ==================== ARTIST EXTRACTION ===================
 const EXCLUDE_LIST = [
   "moet city",
   "moët city",

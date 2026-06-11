@@ -3,7 +3,7 @@ require('dotenv').config();
 
 const { SUPABASE_URL, SUPABASE_KEY } = process.env;
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
-// Comment
+// Commnt
 function classifyItem(item) {
   // 1. Normalize Inputs Inputs
   const name = (item.order_sales_item_name || "").toUpperCase();

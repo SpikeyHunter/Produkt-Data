@@ -11,7 +11,7 @@ jobs:
   sync:
     runs-on: ubuntu-latest
     steps:
-      # Step 1: Check out your repository code
+      # Step 1: Check out  your repository code
       - name: Check out code
         uses: actions/checkout@v4
 

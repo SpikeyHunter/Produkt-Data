@@ -5,7 +5,7 @@ require("dotenv").config();
 
 console.log("🚀 Starting Tixr User Enrichment Script (Final Version)...");
 // Comment
-// --- CONFIGURATION ------
+// --- CONFIGURATION ----
 const {
   SUPABASE_URL,
   SUPABASE_KEY,

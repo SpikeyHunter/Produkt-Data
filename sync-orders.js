@@ -26,7 +26,7 @@ if (!SUPABASE_URL || !SUPABASE_KEY || !TIXR_CPK || !TIXR_SECRET_KEY || !TIXR_GRO
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 const TIXR_API_BASE_URL = 'https://studio.tixr.com';
 
-// ==================== UTILITIES ====================
+// ==================== UTILITIES ==================
 
 class Limiter {
   constructor(maxConcurrent) { this.maxConcurrent = maxConcurrent; this.current = 0; this.queue = []; }
