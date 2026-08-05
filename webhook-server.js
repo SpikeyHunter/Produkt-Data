@@ -225,9 +225,8 @@ app.post('/webhook/event', checkWebhookSecurity, async (req, res) => {
 
   try {
     if (action === 'UNPUBLISH' || action === 'REMOVED') {
-      await supabase.from('events').delete().eq('event_id', event_id);
-      console.log(`  ✅ Event ${event_id} removed from database.`);
-      return res.status(200).json({ success: true, message: 'Event removed' });
+      console.log(`  ⏭️  Event ${event_id} was unpublished/removed on Tixr — ignoring, no DB change made.`);
+      return res.status(200).json({ success: true, message: 'Event unpublish/removed ignored, DB untouched' });
     }
     
     const fullEventData = await fetchTixrEventById(event_id);
