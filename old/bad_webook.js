@@ -83,40 +83,22 @@ function checkWebhookSecurity(req, res, next) {
 
 // ==================== EVENT PROCESSING LOGIC ====================
 
-// ⚠️ Must stay identical to computeEventStatus() in sync-events.js
-function computeEventStatus(eventDate) {
-  const now = new Date();
-  const eventStart = new Date(eventDate + "T00:00:00");
-  const eventEnd = new Date(eventStart);
-  eventEnd.setDate(eventEnd.getDate() + 1);
-  eventEnd.setHours(4, 0, 0, 0);
-
-  return now > eventEnd ? "PAST" : "LIVE";
-}
-
 function convertToMontrealDate(utcDateString) {
   if (!utcDateString) return null;
   const utcDate = new Date(utcDateString);
   return utcDate.toLocaleDateString("en-CA", { timeZone: "America/Montreal", year: "numeric", month: "2-digit", day: "2-digit" });
 }
 
-function transformEventForDB(tixrEvent, { includeStatus = false } = {}) {
+function transformEventForDB(tixrEvent) {
   const eventDate = convertToMontrealDate(tixrEvent.start_date);
-  const row = {
+  return {
     event_id: parseInt(tixrEvent.id),
     event_name: tixrEvent.name,
     event_date: eventDate,
     event_flyer: tixrEvent.flyer_url || tixrEvent.mobile_image_url || null,
     event_updated: new Date().toISOString(),
-    // ⚠️ NOTE: event_status is excluded for EXISTING events so we don't overwrite the
-    // daily sync's LIVE/PAST logic. It IS set on brand-new inserts (see /webhook/event).
+    // ⚠️ NOTE: event_status is intentionally excluded here so we don't overwrite your external LIVE/PAST logic.
   };
-
-  if (includeStatus) {
-    row.event_status = computeEventStatus(eventDate);
-  }
-
-  return row;
 }
 
 // ==================== REAL-TIME SALES AGGREGATION ====================
@@ -252,28 +234,10 @@ app.post('/webhook/event', checkWebhookSecurity, async (req, res) => {
       return res.status(404).json({ error: 'Event not found in Tixr' });
     }
 
-    // Only set event_status on brand-new inserts — existing rows keep the
-    // status managed by the daily sync-events.js job.
-    const { data: existingEvent, error: existsError } = await supabase
-      .from('events')
-      .select('event_id')
-      .eq('event_id', parseInt(fullEventData.id))
-      .maybeSingle();
-
-    if (existsError) {
-      console.error(`  ❌ Failed to check existing event:`, existsError.message);
-      return res.status(500).json({ error: 'Internal server error' });
-    }
-
-    const isNewEvent = !existingEvent;
-    const eventForDB = transformEventForDB(fullEventData, { includeStatus: isNewEvent });
+    const eventForDB = transformEventForDB(fullEventData);
     await supabase.from('events').upsert(eventForDB, { onConflict: 'event_id' });
-
-    if (isNewEvent) {
-      console.log(`  🆕 New event inserted with status ${eventForDB.event_status}: ${eventForDB.event_name} (ID: ${event_id})`);
-    } else {
-      console.log(`  ✅ Event ${eventForDB.event_name} (ID: ${event_id}) successfully synced (status untouched).`);
-    }
+    
+    console.log(`  ✅ Event ${eventForDB.event_name} (ID: ${event_id}) successfully synced.`);
     res.status(200).json({ success: true, message: 'Event synced' });
 
   } catch (error) {
