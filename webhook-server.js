@@ -23,6 +23,12 @@ if (!SUPABASE_URL || !SUPABASE_KEY || !TIXR_CPK || !TIXR_SECRET_KEY || !TIXR_GRO
   process.exit(1);
 }
 
+// Unguessable path segment for webhook URLs (Tixr has no HMAC on webhooks, so
+// the URL is the secret). Derived from TIXR_SECRET_KEY — identical everywhere
+// with no extra env var. Override with WEBHOOK_TOKEN if ever needed.
+const WEBHOOK_TOKEN = process.env.WEBHOOK_TOKEN ||
+  crypto.createHmac('sha256', TIXR_SECRET_KEY).update('produkt-webhook-path').digest('hex').slice(0, 24);
+
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 const TIXR_API_BASE_URL = 'https://studio.tixr.com';
 const app = express();
@@ -82,12 +88,26 @@ async function fetchTixrEventById(eventId) {
     }
 }
 
-// ==================== SECURITY MIDDLEWARE ====================
+// ==================== SECURITY ====================
 
 function checkWebhookSecurity(req, res, next) {
   const clientIp = req.headers['x-forwarded-for']?.split(',')[0] || req.connection.remoteAddress;
   console.log(`\n📥 Received webhook from IP: ${clientIp}`);
   next();
+}
+
+/** Tokened routes only: 404 on a wrong token (looks like a dead URL). */
+function tokenGuard(req, res, next) {
+  if (req.params.token !== WEBHOOK_TOKEN) {
+    console.log('  🚫 Webhook with invalid path token — rejected.');
+    return res.status(404).json({ error: 'Endpoint not found' });
+  }
+  next();
+}
+
+/** Payload must belong to our group. Wrong group -> acknowledged + ignored. */
+function isWrongGroup(body) {
+  return body?.group_id != null && String(body.group_id) !== String(TIXR_GROUP_ID);
 }
 
 // ==================== EVENT PROCESSING LOGIC ====================
@@ -118,7 +138,7 @@ function transformEventForDB(tixrEvent, { includeStatus = false } = {}) {
     event_flyer: tixrEvent.flyer_url || tixrEvent.mobile_image_url || null,
     event_updated: new Date().toISOString(),
     // ⚠️ NOTE: event_status is excluded for EXISTING events so we don't overwrite the
-    // daily sync's LIVE/PAST logic. It IS set on brand-new inserts (see /webhook/event).
+    // daily sync's LIVE/PAST logic. It IS set on brand-new inserts (see event handler).
   };
 
   if (includeStatus) {
@@ -235,12 +255,16 @@ if (RECONCILE_ENABLED) {
   console.log(`⏱️  Reconciliation sweep armed: every ${Math.round(RECONCILE_INTERVAL_MS / 60000)} min (first run in 1 min).`);
 }
 
-// ==================== WEBHOOK ENDPOINTS ====================
+// ==================== WEBHOOK HANDLERS ====================
 
-app.post('/webhook/event', checkWebhookSecurity, async (req, res) => {
+async function handleEventWebhook(req, res) {
   const { event_id, action } = req.body;
   console.log(`  Processing EVENT webhook: Action=${action || 'UPDATE'}, EventID=${event_id}`);
 
+  if (isWrongGroup(req.body)) {
+    console.log(`  🚫 Wrong group_id (${req.body.group_id}) — ignored.`);
+    return res.status(200).json({ success: true, message: 'Ignored' });
+  }
   if (!event_id) {
     return res.status(200).json({ success: true, message: 'No event_id, ignored' });
   }
@@ -284,12 +308,16 @@ app.post('/webhook/event', checkWebhookSecurity, async (req, res) => {
     console.error(`  ❌ Error processing event webhook:`, error.message);
     res.status(500).json({ error: 'Internal server error' });
   }
-});
+}
 
-app.post('/webhook/order', checkWebhookSecurity, async (req, res) => {
+async function handleOrderWebhook(req, res) {
     const { order_id, event_id, transaction_type } = req.body || {};
     console.log(`  Processing ORDER webhook: Transaction=${transaction_type}, OrderID=${order_id}`);
 
+    if (isWrongGroup(req.body)) {
+        console.log(`  🚫 Wrong group_id (${req.body.group_id}) — ignored.`);
+        return res.status(200).json({ success: true, message: 'Ignored' });
+    }
     if (!order_id) {
         return res.status(200).json({ success: true, message: 'No order_id, ignored' });
     }
@@ -345,8 +373,119 @@ app.post('/webhook/order', checkWebhookSecurity, async (req, res) => {
             }
         }
     });
-});
+}
 
+async function handleTicketWebhook(req, res) {
+    const body = req.body || {};
+    const serial = body.serial_id || body.serial_number;
+    const action = (body.action || '').toUpperCase();
+    console.log(`  Processing TICKET webhook: Action=${action}, Serial=${serial}, EventID=${body.event_id}`);
+
+    if (isWrongGroup(body)) {
+        console.log(`  🚫 Wrong group_id (${body.group_id}) — ignored.`);
+        return res.status(200).json({ success: true, message: 'Ignored' });
+    }
+    if (!serial) {
+        return res.status(200).json({ success: true, message: 'No serial, ignored' });
+    }
+
+    // 1. Raw log first (same pattern as orders)
+    const idempotencyKey = crypto.createHash('sha256')
+        .update(`ticket:${serial}:${action}:${JSON.stringify(body)}`)
+        .digest('hex');
+
+    const { data: logged, error: logErr } = await supabase
+        .from('tixr_webhook_events')
+        .insert({
+            entity:           'ticket',
+            event_id:         body.event_id ?? null,
+            order_id:         body.order_id != null ? String(body.order_id) : null,
+            transaction_type: action || null,
+            idempotency_key:  idempotencyKey,
+            payload:          body,
+        })
+        .select('id')
+        .single();
+
+    if (logErr) {
+        if (logErr.code === '23505') {
+            console.log(`  🔁 Duplicate ticket delivery for ${serial} — acknowledged, not reprocessed.`);
+            return res.status(200).json({ success: true, message: 'Duplicate ignored' });
+        }
+        console.error(`  ❌ Failed to log raw ticket webhook:`, logErr.message);
+    }
+
+    // 2. Acknowledge immediately
+    res.status(200).json({ success: true, message: 'Received' });
+
+    // 3. Update events_tickets asynchronously. checkin_state is webhook-owned;
+    //    the sweep owns `status` — the two never clobber each other.
+    const logId = logged?.id;
+    setImmediate(async () => {
+        try {
+            const row = {
+                serial_number: String(serial),
+                checkin_state: action || null,
+                updated_at:    new Date().toISOString(),
+            };
+            // Insert-safety: a scan can arrive before the order sync creates the
+            // row, so carry the identifiers the payload gives us.
+            if (body.order_id != null) row.order_id = String(body.order_id);
+            if (body.event_id != null) row.event_id = body.event_id;
+            if (body.first_name) row.holder_first_name = capitalize(body.first_name);
+            if (body.last_name)  row.holder_last_name  = capitalize(body.last_name);
+            if (body.agent_email) row.checkin_agent   = body.agent_email;
+            if (body.device_name) row.checkin_device  = body.device_name;
+            if (body.scanner)     row.checkin_scanner = body.scanner;
+            if (action === 'CHECKED_IN') row.checkin_time = msToIso(body.date) || new Date().toISOString();
+
+            const { error: upErr } = await supabase.from('events_tickets')
+                .upsert(row, { onConflict: 'serial_number' });
+            if (upErr) throw new Error(`events_tickets upsert failed: ${upErr.message}`);
+
+            if (body.event_id != null) {
+                await supabase.from('tixr_sync_state').upsert({
+                    event_id:        body.event_id,
+                    last_webhook_at: new Date().toISOString(),
+                    updated_at:      new Date().toISOString(),
+                }, { onConflict: 'event_id' });
+            }
+
+            console.log(`  💾 Ticket ${serial} -> ${action || '(no action)'} recorded.`);
+            if (logId) {
+                await supabase.from('tixr_webhook_events')
+                    .update({ processed_at: new Date().toISOString() })
+                    .eq('id', logId);
+            }
+        } catch (error) {
+            console.error(`  ❌ Error processing ticket ${serial}:`, error.message);
+            if (logId) {
+                await supabase.from('tixr_webhook_events')
+                    .update({ process_error: error.message })
+                    .eq('id', logId);
+            }
+        }
+    });
+}
+
+// ==================== ROUTES ====================
+
+// Secured routes (the token in the path is the secret — configure these URLs
+// as the channels in Tixr Studio):
+app.post('/webhook/:token/order',  checkWebhookSecurity, tokenGuard, handleOrderWebhook);
+app.post('/webhook/:token/ticket', checkWebhookSecurity, tokenGuard, handleTicketWebhook);
+app.post('/webhook/:token/event',  checkWebhookSecurity, tokenGuard, handleEventWebhook);
+
+// LEGACY routes — keep alive until the Tixr channels point at the tokened
+// URLs, then DELETE this block.
+app.post('/webhook/order', checkWebhookSecurity, (req, res) => {
+  console.log('  ⚠️ Legacy /webhook/order hit — switch the Tixr channel to the tokened URL.');
+  return handleOrderWebhook(req, res);
+});
+app.post('/webhook/event', checkWebhookSecurity, (req, res) => {
+  console.log('  ⚠️ Legacy /webhook/event hit — switch the Tixr channel to the tokened URL.');
+  return handleEventWebhook(req, res);
+});
 
 // ==================== SERVER BOILERPLATE ====================
 
@@ -358,5 +497,6 @@ const server = app.listen(PORT, () => {
   console.log('═══════════════════════════════════════════');
   console.log('     TIXR ALL-IN-ONE WEBHOOK SERVER');
   console.log(`🚀 Server running on port ${PORT}, ready for webhooks.`);
+  console.log('🔐 Tokened webhook paths armed (see repo docs for URLs).');
   console.log('═══════════════════════════════════════════');
 });
