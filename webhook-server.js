@@ -1,9 +1,10 @@
+require('dotenv').config();   // must run BEFORE lib requires (they read env at load)
 const express = require('express');
 const { createClient } = require('@supabase/supabase-js');
 const axios = require('axios');
 const crypto = require('crypto');
 const { projectOrder } = require('./lib/order-projection');
-require('dotenv').config();
+const { syncEventOrders, recordSyncError } = require('./lib/event-orders-sync');
 
 console.log('🚀 Starting Tixr All-in-One Webhook Server...');
 
@@ -153,6 +154,85 @@ async function processOrder(orderId, webhookBody) {
     if (stateErr) console.error(`  ⚠️ tixr_sync_state upsert failed: ${stateErr.message}`);
 
     console.log(`  💾 Order ${fullOrder.order_id} projected: ${items} items, ${tickets} tickets.`);
+}
+
+// ==================== RECONCILIATION SWEEP (Phase 3) ====================
+//
+// Every 15 minutes, in-process (no separate Render service):
+//   · every LIVE event gets a full order re-sync from the Studio API
+//     (idempotent upserts — catches missed webhooks, refunds/cancellations on
+//     old orders, AND the zero-orders case, all in one code path)
+//   · plus any event manually flagged backfill_requested in tixr_sync_state
+//     (the Mac app's "backfill this past event" switch)
+// Cursors/state live in the DB, so redeploys are harmless.
+
+const RECONCILE_INTERVAL_MS = parseInt(process.env.RECONCILE_INTERVAL_MS || '', 10) || 15 * 60 * 1000;
+const RECONCILE_ENABLED = process.env.RECONCILE_ENABLED !== 'false';
+
+let sweepRunning = false;
+
+async function reconcileSweep() {
+  if (sweepRunning) {
+    console.log('⏭️  Previous reconciliation sweep still running — skipping this cycle.');
+    return;
+  }
+  sweepRunning = true;
+  const started = Date.now();
+
+  try {
+    // LIVE events (real Tixr events only — customs have event_id < 10000 / is_custom)
+    const { data: liveEvents, error: liveErr } = await supabase
+      .from('events')
+      .select('event_id, is_custom')
+      .eq('event_status', 'LIVE');
+    if (liveErr) throw new Error(`events read failed: ${liveErr.message}`);
+
+    // Manually requested backfills (past events)
+    const { data: requested, error: reqErr } = await supabase
+      .from('tixr_sync_state')
+      .select('event_id')
+      .eq('backfill_requested', true);
+    if (reqErr) throw new Error(`tixr_sync_state read failed: ${reqErr.message}`);
+
+    const targets = new Set();
+    for (const e of (liveEvents || [])) {
+      if (e.event_id >= 10000 && e.is_custom !== true) targets.add(e.event_id);
+    }
+    for (const r of (requested || [])) targets.add(r.event_id);
+
+    if (targets.size === 0) {
+      console.log('🔄 Reconciliation sweep: nothing to sync.');
+      return;
+    }
+
+    console.log(`🔄 Reconciliation sweep: ${targets.size} event(s)...`);
+    let ok = 0, failed = 0, totalOrders = 0;
+
+    for (const eventId of targets) {
+      try {
+        const stats = await syncEventOrders(supabase, eventId);
+        totalOrders += stats.orders;
+        ok++;
+      } catch (err) {
+        failed++;
+        console.error(`  ❌ Sweep failed for event ${eventId}: ${err.message}`);
+        await recordSyncError(supabase, eventId, err.message);
+      }
+    }
+
+    const secs = ((Date.now() - started) / 1000).toFixed(1);
+    console.log(`✅ Sweep done in ${secs}s — ${ok} event(s) OK (${totalOrders} orders confirmed), ${failed} failed.`);
+  } catch (err) {
+    console.error('❌ Reconciliation sweep error:', err.message);
+  } finally {
+    sweepRunning = false;
+  }
+}
+
+if (RECONCILE_ENABLED) {
+  setInterval(reconcileSweep, RECONCILE_INTERVAL_MS);
+  setTimeout(reconcileSweep, 60 * 1000);   // first sweep 1 min after boot
+  console.log(`⏱️  Reconciliation sweep armed: every ${Math.round(RECONCILE_INTERVAL_MS / 60000)} min (first run in 1 min).`);
 }
 
 // ==================== WEBHOOK ENDPOINTS ====================
