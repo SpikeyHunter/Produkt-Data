@@ -476,14 +476,10 @@ app.post('/webhook/:token/order',  checkWebhookSecurity, tokenGuard, handleOrder
 app.post('/webhook/:token/ticket', checkWebhookSecurity, tokenGuard, handleTicketWebhook);
 app.post('/webhook/:token/event',  checkWebhookSecurity, tokenGuard, handleEventWebhook);
 
-// LEGACY routes — keep alive until the Tixr channels point at the tokened
-// URLs, then DELETE this block.
-app.post('/webhook/order', checkWebhookSecurity, (req, res) => {
-  console.log('  ⚠️ Legacy /webhook/order hit — switch the Tixr channel to the tokened URL.');
-  return handleOrderWebhook(req, res);
-});
+// LEGACY route — the "Event Updates" policy channel may still point here.
+// Once its channel is switched to /webhook/<token>/event, DELETE this block.
 app.post('/webhook/event', checkWebhookSecurity, (req, res) => {
-  console.log('  ⚠️ Legacy /webhook/event hit — switch the Tixr channel to the tokened URL.');
+  console.log('  ⚠️ Legacy /webhook/event hit — switch the Event Updates channel to the tokened URL.');
   return handleEventWebhook(req, res);
 });
 
