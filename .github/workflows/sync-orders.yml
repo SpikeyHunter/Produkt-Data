@@ -1,9 +1,9 @@
 name: Sync Tixr Orders and Users
 
 on:
-  schedule:
-    # This runs the job every 2hours a
-    - cron: '0 */2 * * *'
+  # DISABLED 2026-08-21: sync-orders.js wrote to events_orders, which was
+  # dropped in migration 001. Replaced by the webhook + backfill/reconciliation
+  # pipeline (Phases 2-3). Manual trigger kept for reference only — do not run.
   workflow_dispatch:
     # This adds a button in the GitHub Actions UI to run the job manually.
 

@@ -3,13 +3,10 @@
 name: 📈 Sync Event Sales Data
 
 on:
-  # Allows you to run this workflow manually from the Actions taba 
+  # DISABLED 2026-08-21: sync-sales.js wrote to events_sales, which was
+  # dropped in migration 001 (aggregates now come from SQL over order_items).
+  # Manual trigger kept for reference only — do not run.
   workflow_dispatch:
-
-  # Runs the jobo on a schedule
-  schedule:
-    # This runs the workflow every 6 hourshours
-    - cron: "0 */6 * * *"
 
 jobs:
   sync-sales:
