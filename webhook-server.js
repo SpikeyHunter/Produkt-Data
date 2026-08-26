@@ -5,7 +5,7 @@ const axios = require('axios');
 const crypto = require('crypto');
 const { projectOrder } = require('./lib/order-projection');
 const { syncEventOrders, recordSyncError } = require('./lib/event-orders-sync');
-const { runIgCycle } = require('./lib/ig-sync');
+const { runIgCycle, fetchCatalog, importMediaIds } = require('./lib/ig-sync');
 
 console.log('🚀 Starting Tixr All-in-One Webhook Server...');
 
@@ -521,6 +521,31 @@ app.post('/webhook/:token/event',  checkWebhookSecurity, tokenGuard, handleEvent
 app.post('/webhook/:token/ig-sync-now', checkWebhookSecurity, tokenGuard, (req, res) => {
   res.status(200).json({ success: true, message: 'IG sync triggered' });
   setImmediate(igSyncTick);
+});
+
+// Mac app "+ Add Content": browse the account's media history...
+app.get('/webhook/:token/ig-catalog', tokenGuard, async (req, res) => {
+  try {
+    const result = await fetchCatalog(supabase, req.query.after || null);
+    res.status(200).json(result);
+  } catch (err) {
+    console.error('❌ ig-catalog error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ...and import the picked items (insert + media capture + AI classification).
+app.post('/webhook/:token/ig-import', tokenGuard, async (req, res) => {
+  const ids = Array.isArray(req.body?.media_ids) ? req.body.media_ids.map(String) : [];
+  if (ids.length === 0) return res.status(400).json({ error: 'media_ids required' });
+  if (ids.length > 50)  return res.status(400).json({ error: 'max 50 items per import' });
+  try {
+    const imported = await importMediaIds(supabase, ids);
+    res.status(200).json({ success: true, imported });
+  } catch (err) {
+    console.error('❌ ig-import error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // LEGACY route — the "Event Updates" policy channel may still point here.
