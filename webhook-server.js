@@ -5,6 +5,7 @@ const axios = require('axios');
 const crypto = require('crypto');
 const { projectOrder } = require('./lib/order-projection');
 const { syncEventOrders, recordSyncError } = require('./lib/event-orders-sync');
+const { runIgCycle } = require('./lib/ig-sync');
 
 console.log('🚀 Starting Tixr All-in-One Webhook Server...');
 
@@ -253,6 +254,45 @@ if (RECONCILE_ENABLED) {
   setInterval(reconcileSweep, RECONCILE_INTERVAL_MS);
   setTimeout(reconcileSweep, 60 * 1000);   // first sweep 1 min after boot
   console.log(`⏱️  Reconciliation sweep armed: every ${Math.round(RECONCILE_INTERVAL_MS / 60000)} min (first run in 1 min).`);
+}
+
+// ==================== INSTAGRAM SYNC (Phases 5+6) ====================
+//
+// Every 5 minutes, in-process: detect new posts/reels/stories, capture their
+// preview media (CDN URLs expire in hours), refresh insights on the decaying
+// ladder, final-capture stories at 23h, daily account snapshot.
+// Meta has NO webhook for own posts — polling is the only way.
+
+const IG_SYNC_INTERVAL_MS = parseInt(process.env.IG_SYNC_INTERVAL_MS || '', 10) || 5 * 60 * 1000;
+const IG_SYNC_ENABLED = process.env.IG_SYNC_ENABLED !== 'false'
+  && !!process.env.META_ACCESS_TOKEN && !!process.env.IG_USER_ID;
+
+let igCycleRunning = false;
+
+async function igSyncTick() {
+  if (igCycleRunning) {
+    console.log('⏭️  Previous IG cycle still running — skipping.');
+    return;
+  }
+  igCycleRunning = true;
+  try {
+    const result = await runIgCycle(supabase);
+    if (!result.skipped && (result.detected > 0 || result.refreshed > 0)) {
+      console.log(`📸 IG cycle: ${result.detected} new, ${result.refreshed} refreshed.`);
+    }
+  } catch (err) {
+    console.error('❌ IG cycle error:', err.message);
+  } finally {
+    igCycleRunning = false;
+  }
+}
+
+if (IG_SYNC_ENABLED) {
+  setInterval(igSyncTick, IG_SYNC_INTERVAL_MS);
+  setTimeout(igSyncTick, 90 * 1000);   // first cycle 90s after boot
+  console.log(`📸 IG sync armed: every ${Math.round(IG_SYNC_INTERVAL_MS / 60000)} min (first run in 90s).`);
+} else {
+  console.log('📸 IG sync disabled (missing META_ACCESS_TOKEN/IG_USER_ID or IG_SYNC_ENABLED=false).');
 }
 
 // ==================== WEBHOOK HANDLERS ====================
