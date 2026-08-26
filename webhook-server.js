@@ -516,6 +516,13 @@ app.post('/webhook/:token/order',  checkWebhookSecurity, tokenGuard, handleOrder
 app.post('/webhook/:token/ticket', checkWebhookSecurity, tokenGuard, handleTicketWebhook);
 app.post('/webhook/:token/event',  checkWebhookSecurity, tokenGuard, handleEventWebhook);
 
+// Manual trigger from the Mac app: run an IG sync cycle right now (the app
+// first bumps next_refresh_at on all live rows, so this refreshes everything).
+app.post('/webhook/:token/ig-sync-now', checkWebhookSecurity, tokenGuard, (req, res) => {
+  res.status(200).json({ success: true, message: 'IG sync triggered' });
+  setImmediate(igSyncTick);
+});
+
 // LEGACY route — the "Event Updates" policy channel may still point here.
 // Once its channel is switched to /webhook/<token>/event, DELETE this block.
 app.post('/webhook/event', checkWebhookSecurity, (req, res) => {
