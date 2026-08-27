@@ -8,6 +8,8 @@ const { syncEventOrders, recordSyncError } = require('./lib/event-orders-sync');
 const { runIgCycle, fetchCatalog, importMediaIds, fetchMediaChildren } = require('./lib/ig-sync');
 const { fetchAdsCatalog, countNewAds, importAds, refreshTrackedAds, fetchAdMedia } = require('./lib/ads-sync');
 const { generateProjectInsight, chatWithAnalyst } = require('./lib/ig-ai');
+const { scrapeSource, scrapeAll, fetchText } = require('./lib/booking-scraper');
+const { authorRecipe } = require('./lib/booking-ai');
 
 console.log('🚀 Starting Tixr All-in-One Webhook Server...');
 
@@ -617,6 +619,112 @@ app.get('/webhook/:token/ad-media', tokenGuard, async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
+// ==================== ARTIST AVAILABILITY (booking scraper) ====================
+
+// Fetch a page's HTML for the app's recipe author (avoids CORS/UA problems
+// and gives the model the same bytes the nightly job will see).
+app.get('/webhook/:token/booking-page', tokenGuard, async (req, res) => {
+  const url = String(req.query.url || '');
+  if (!/^https?:\/\//i.test(url)) return res.status(400).json({ error: 'valid url required' });
+  try {
+    const html = await fetchText(url);
+    res.status(200).json({ html: html.slice(0, 400_000) });
+  } catch (err) {
+    res.status(200).json({ html: '', error: err.message });
+  }
+});
+
+// One turn of the "teach me this website" conversation → an updated recipe.
+app.post('/webhook/:token/booking-author', checkWebhookSecurity, tokenGuard, async (req, res) => {
+  try {
+    res.status(200).json(await authorRecipe({
+      url: req.body?.url,
+      pageSample: req.body?.page_sample,
+      networkSamples: req.body?.network_samples || [],
+      selectedElements: req.body?.selected_elements || [],
+      messages: req.body?.messages || [],
+      currentRecipe: req.body?.current_recipe || null,
+    }));
+  } catch (err) {
+    console.error('❌ booking-author error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Run one source. dry_run returns the parsed events WITHOUT writing, which is
+// what the "Test" button in the recipe editor uses. rendered_html lets the
+// app hand over a JS-rendered DOM for browser-mode sites.
+app.post('/webhook/:token/booking-scrape', checkWebhookSecurity, tokenGuard, async (req, res) => {
+  const sourceId = req.body?.source_id;
+  const inline = req.body?.source;          // unsaved source, for testing
+  try {
+    let source = inline;
+    if (!source && sourceId) {
+      const { data, error } = await supabase
+        .from('mktg_booking_source').select('*').eq('id', sourceId).single();
+      if (error) throw new Error(error.message);
+      source = data;
+    }
+    if (!source) return res.status(400).json({ error: 'source_id or source required' });
+
+    res.status(200).json(await scrapeSource(supabase, source, {
+      renderedHTML: req.body?.rendered_html || null,
+      dryRun: req.body?.dry_run === true,
+    }));
+  } catch (err) {
+    console.error('❌ booking-scrape error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Every enabled source (browser-mode ones are skipped — see the scraper).
+app.post('/webhook/:token/booking-scrape-all', checkWebhookSecurity, tokenGuard, (req, res) => {
+  res.status(200).json({ success: true, message: 'Booking sync started' });
+  setImmediate(() => bookingSyncTick('manual'));
+});
+
+// Daily at ~05:15 America/Montreal, plus a catch-up if the server was asleep.
+const BOOKING_SYNC_HOUR = parseInt(process.env.BOOKING_SYNC_HOUR || '', 10) || 5;
+const BOOKING_SYNC_ENABLED = process.env.BOOKING_SYNC_ENABLED !== 'false';
+
+let bookingRunning = false;
+let lastBookingSync = 0;
+
+async function bookingSyncTick(trigger = 'cron') {
+  if (bookingRunning) {
+    console.log('⏭️  Booking sync already running — skipping.');
+    return;
+  }
+  bookingRunning = true;
+  try {
+    console.log(`🎫 Booking sync (${trigger}) starting…`);
+    const results = await scrapeAll(supabase);
+    lastBookingSync = Date.now();
+    const total = results.reduce((sum, r) => sum + (r.count || 0), 0);
+    const failed = results.filter(r => r.ok === false).length;
+    console.log(`🎫 Booking sync done: ${total} events across ${results.length} sources (${failed} failed).`);
+  } catch (err) {
+    console.error('❌ Booking sync error:', err.message);
+  } finally {
+    bookingRunning = false;
+  }
+}
+
+if (BOOKING_SYNC_ENABLED) {
+  // Checked every 15 min: fires once when the Montréal hour matches and the
+  // last successful run was over 20h ago (redeploy-safe, no cron daemon).
+  setInterval(() => {
+    const hour = Number(new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'America/Montreal', hour: 'numeric', hour12: false,
+    }).format(new Date()));
+    const stale = Date.now() - lastBookingSync > 20 * 60 * 60 * 1000;
+    if (hour === BOOKING_SYNC_HOUR && stale) bookingSyncTick('daily');
+  }, 15 * 60 * 1000);
+  console.log(`🎫 Booking sync armed: daily at ${BOOKING_SYNC_HOUR}:00 America/Montreal.`);
+} else {
+  console.log('🎫 Booking sync disabled (BOOKING_SYNC_ENABLED=false).');
+}
 
 // Produkt AI — interactive chat about one event/group's numbers (stateless;
 // the app sends the transcript + data snapshot each turn).
