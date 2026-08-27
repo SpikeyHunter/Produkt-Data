@@ -5,7 +5,7 @@ const axios = require('axios');
 const crypto = require('crypto');
 const { projectOrder } = require('./lib/order-projection');
 const { syncEventOrders, recordSyncError } = require('./lib/event-orders-sync');
-const { runIgCycle, fetchCatalog, importMediaIds } = require('./lib/ig-sync');
+const { runIgCycle, fetchCatalog, importMediaIds, fetchMediaChildren } = require('./lib/ig-sync');
 
 console.log('🚀 Starting Tixr All-in-One Webhook Server...');
 
@@ -521,6 +521,19 @@ app.post('/webhook/:token/event',  checkWebhookSecurity, tokenGuard, handleEvent
 app.post('/webhook/:token/ig-sync-now', checkWebhookSecurity, tokenGuard, (req, res) => {
   res.status(200).json({ success: true, message: 'IG sync triggered' });
   setImmediate(igSyncTick);
+});
+
+// Full-resolution / playable URLs for one post's carousel children. Meta CDN
+// links expire within hours, so the app asks for them at view time.
+app.get('/webhook/:token/ig-children', tokenGuard, async (req, res) => {
+  const mediaId = String(req.query.media_id || '');
+  if (!mediaId) return res.status(400).json({ error: 'media_id required' });
+  try {
+    res.status(200).json({ items: await fetchMediaChildren(mediaId) });
+  } catch (err) {
+    console.error('❌ ig-children error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // Mac app "+ Add Content": browse the account's media history...
