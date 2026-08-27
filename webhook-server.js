@@ -7,7 +7,7 @@ const { projectOrder } = require('./lib/order-projection');
 const { syncEventOrders, recordSyncError } = require('./lib/event-orders-sync');
 const { runIgCycle, fetchCatalog, importMediaIds, fetchMediaChildren } = require('./lib/ig-sync');
 const { fetchAdsCatalog, countNewAds, importAds, refreshTrackedAds, fetchAdMedia } = require('./lib/ads-sync');
-const { generateProjectInsight } = require('./lib/ig-ai');
+const { generateProjectInsight, chatWithAnalyst } = require('./lib/ig-ai');
 
 console.log('🚀 Starting Tixr All-in-One Webhook Server...');
 
@@ -570,9 +570,13 @@ app.post('/webhook/:token/ads-sync-now', checkWebhookSecurity, tokenGuard, (req,
 });
 
 // "Add Ads" browser: page through the ad account, tracked-flagged.
+// ?q= searches ad names account-wide (Meta-side filtering).
 app.get('/webhook/:token/ads-catalog', tokenGuard, async (req, res) => {
   try {
-    res.status(200).json(await fetchAdsCatalog(supabase, { after: req.query.after || null }));
+    res.status(200).json(await fetchAdsCatalog(supabase, {
+      after: req.query.after || null,
+      q: req.query.q ? String(req.query.q) : null,
+    }));
   } catch (err) {
     console.error('❌ ads-catalog error:', err.message);
     res.status(500).json({ error: err.message });
@@ -610,6 +614,20 @@ app.get('/webhook/:token/ad-media', tokenGuard, async (req, res) => {
     res.status(200).json({ items: await fetchAdMedia(supabase, adId) });
   } catch (err) {
     console.error('❌ ad-media error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Produkt AI — interactive chat about one event/group's numbers (stateless;
+// the app sends the transcript + data snapshot each turn).
+app.post('/webhook/:token/ai-chat', checkWebhookSecurity, tokenGuard, async (req, res) => {
+  const messages = Array.isArray(req.body?.messages) ? req.body.messages : [];
+  if (messages.length === 0) return res.status(400).json({ error: 'messages required' });
+  try {
+    const reply = await chatWithAnalyst(req.body?.context || {}, messages);
+    res.status(200).json({ reply });
+  } catch (err) {
+    console.error('❌ ai-chat error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
