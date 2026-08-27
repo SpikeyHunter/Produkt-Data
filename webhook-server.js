@@ -6,7 +6,8 @@ const crypto = require('crypto');
 const { projectOrder } = require('./lib/order-projection');
 const { syncEventOrders, recordSyncError } = require('./lib/event-orders-sync');
 const { runIgCycle, fetchCatalog, importMediaIds, fetchMediaChildren } = require('./lib/ig-sync');
-const { runAdsCycle } = require('./lib/ads-sync');
+const { fetchAdsCatalog, countNewAds, importAds, refreshTrackedAds, fetchAdMedia } = require('./lib/ads-sync');
+const { generateProjectInsight } = require('./lib/ig-ai');
 
 console.log('🚀 Starting Tixr All-in-One Webhook Server...');
 
@@ -296,11 +297,11 @@ if (IG_SYNC_ENABLED) {
   console.log('📸 IG sync disabled (missing META_ACCESS_TOKEN/IG_USER_ID or IG_SYNC_ENABLED=false).');
 }
 
-// ==================== ADS SYNC (Meta Marketing API) ====================
+// ==================== ADS SYNC (tracked ads only) ====================
 //
-// Every 30 minutes: every ad in the account with lifetime insights →
-// mktg_ads. Lifetime totals barely move for finished ads, so a full sweep is
-// cheap; live campaigns get fresh spend/reach every cycle.
+// mktg_ads is manually curated from the app ("Add Ads" browser). The cycle
+// only refreshes insights for TRACKED ads: active ones every 30 minutes,
+// everything tracked once a day. No account-wide crawling.
 
 const ADS_SYNC_INTERVAL_MS = parseInt(process.env.ADS_SYNC_INTERVAL_MS || '', 10) || 30 * 60 * 1000;
 const ADS_SYNC_ENABLED = process.env.ADS_SYNC_ENABLED !== 'false' && !!process.env.META_ACCESS_TOKEN;
@@ -316,9 +317,9 @@ async function adsSyncTick(forceFull = false) {
   adsCycleRunning = true;
   const full = forceFull || Date.now() - lastFullAdsSync > 24 * 60 * 60 * 1000;
   try {
-    const result = await runAdsCycle(supabase, { full });
-    if (full && !result.rateLimited) lastFullAdsSync = Date.now();
-    console.log(`💰 Ads ${full ? 'FULL' : 'active'} cycle: ${result.total} ads synced.`);
+    const result = await refreshTrackedAds(supabase, { activeOnly: !full });
+    if (full) lastFullAdsSync = Date.now();
+    if (result.total > 0) console.log(`💰 Ads refresh (${full ? 'all tracked' : 'active'}): ${result.total} ads.`);
   } catch (err) {
     console.error('❌ Ads cycle error:', err.message);
   } finally {
@@ -327,12 +328,9 @@ async function adsSyncTick(forceFull = false) {
 }
 
 if (ADS_SYNC_ENABLED) {
-  // Boot: skip the daily full sweep for an hour so a redeploy doesn't
-  // immediately burn ad-account rate limit; incremental covers live ads.
-  lastFullAdsSync = Date.now() - 23 * 60 * 60 * 1000;
   setInterval(() => adsSyncTick(), ADS_SYNC_INTERVAL_MS);
   setTimeout(() => adsSyncTick(), 3 * 60 * 1000);   // first cycle 3 min after boot
-  console.log(`💰 Ads sync armed: every ${Math.round(ADS_SYNC_INTERVAL_MS / 60000)} min (first run in 3 min).`);
+  console.log(`💰 Ads sync armed: every ${Math.round(ADS_SYNC_INTERVAL_MS / 60000)} min, tracked ads only.`);
 } else {
   console.log('💰 Ads sync disabled (missing META_ACCESS_TOKEN or ADS_SYNC_ENABLED=false).');
 }
@@ -565,10 +563,68 @@ app.post('/webhook/:token/ig-sync-now', checkWebhookSecurity, tokenGuard, (req, 
   setImmediate(igSyncTick);
 });
 
-// Manual trigger from the Mac app: refresh all ads right now.
+// Manual trigger from the Mac app: refresh all tracked ads right now.
 app.post('/webhook/:token/ads-sync-now', checkWebhookSecurity, tokenGuard, (req, res) => {
   res.status(200).json({ success: true, message: 'Ads sync triggered' });
-  setImmediate(adsSyncTick);
+  setImmediate(() => adsSyncTick(true));
+});
+
+// "Add Ads" browser: page through the ad account, tracked-flagged.
+app.get('/webhook/:token/ads-catalog', tokenGuard, async (req, res) => {
+  try {
+    res.status(200).json(await fetchAdsCatalog(supabase, { after: req.query.after || null }));
+  } catch (err) {
+    console.error('❌ ads-catalog error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Badge count: untracked ads created in the last 60 days.
+app.get('/webhook/:token/ads-new-count', tokenGuard, async (req, res) => {
+  try {
+    res.status(200).json({ count: await countNewAds(supabase) });
+  } catch (err) {
+    console.error('❌ ads-new-count error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Import the user's selection: full fields + insights, capture hi-res
+// preview, AI-suggest the event link (suggest-only).
+app.post('/webhook/:token/ads-import', checkWebhookSecurity, tokenGuard, async (req, res) => {
+  const ids = Array.isArray(req.body?.ad_ids) ? req.body.ad_ids.map(String) : [];
+  if (ids.length === 0) return res.status(400).json({ error: 'ad_ids required' });
+  try {
+    res.status(200).json(await importAds(supabase, ids));
+  } catch (err) {
+    console.error('❌ ads-import error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Full-res media for the expanded ad viewer (playable when it boosts a post).
+app.get('/webhook/:token/ad-media', tokenGuard, async (req, res) => {
+  const adId = String(req.query.ad_id || '');
+  if (!adId) return res.status(400).json({ error: 'ad_id required' });
+  try {
+    res.status(200).json({ items: await fetchAdMedia(supabase, adId) });
+  } catch (err) {
+    console.error('❌ ad-media error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Produkt AI — dashboard analysis with a server-side 1h cooldown per project.
+app.post('/webhook/:token/ai-insight', checkWebhookSecurity, tokenGuard, async (req, res) => {
+  const projectId = parseInt(req.body?.project_id, 10);
+  if (!projectId) return res.status(400).json({ error: 'project_id required' });
+  try {
+    res.status(200).json(await generateProjectInsight(
+      supabase, projectId, req.body?.context || {}, { force: req.body?.force === true }));
+  } catch (err) {
+    console.error('❌ ai-insight error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // Full-resolution / playable URLs for one post's carousel children. Meta CDN
