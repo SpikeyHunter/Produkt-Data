@@ -727,6 +727,33 @@ if (BOOKING_SYNC_ENABLED) {
   console.log('🎫 Booking sync disabled (BOOKING_SYNC_ENABLED=false).');
 }
 
+// Which AI provider this deployment is actually using. Never returns the
+// key itself — just enough to answer "did the env var land?".
+app.get('/webhook/:token/ai-status', tokenGuard, async (req, res) => {
+  const anthropic = !!process.env.ANTHROPIC_API_KEY;
+  const openai = !!process.env.OPENAI_API_KEY;
+  const status = {
+    provider: anthropic ? 'anthropic' : (openai ? 'openai' : 'none'),
+    assistant_model: anthropic ? (process.env.ANTHROPIC_MODEL || 'claude-sonnet-5') : 'gpt-4o-mini',
+    extraction_model: anthropic
+      ? (process.env.BOOKING_EXTRACT_MODEL || 'claude-haiku-4-5-20251001')
+      : 'gpt-4o-mini',
+    anthropic_key_present: anthropic,
+    openai_key_present: openai,
+  };
+
+  // Prove it end to end rather than just reporting the env var
+  try {
+    const reply = await chatWithAnalyst({}, [{ role: 'user', content: 'Reply with exactly: PONG' }]);
+    status.live_call = reply.slice(0, 40);
+    status.ok = true;
+  } catch (err) {
+    status.ok = false;
+    status.live_call_error = err.response?.data?.error?.message || err.message;
+  }
+  res.status(200).json(status);
+});
+
 // Produkt AI — interactive chat about one event/group's numbers (stateless;
 // the app sends the transcript + data snapshot each turn).
 app.post('/webhook/:token/ai-chat', checkWebhookSecurity, tokenGuard, async (req, res) => {
