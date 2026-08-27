@@ -6,6 +6,7 @@ const crypto = require('crypto');
 const { projectOrder } = require('./lib/order-projection');
 const { syncEventOrders, recordSyncError } = require('./lib/event-orders-sync');
 const { runIgCycle, fetchCatalog, importMediaIds, fetchMediaChildren } = require('./lib/ig-sync');
+const { runAdsCycle } = require('./lib/ads-sync');
 
 console.log('🚀 Starting Tixr All-in-One Webhook Server...');
 
@@ -295,6 +296,47 @@ if (IG_SYNC_ENABLED) {
   console.log('📸 IG sync disabled (missing META_ACCESS_TOKEN/IG_USER_ID or IG_SYNC_ENABLED=false).');
 }
 
+// ==================== ADS SYNC (Meta Marketing API) ====================
+//
+// Every 30 minutes: every ad in the account with lifetime insights →
+// mktg_ads. Lifetime totals barely move for finished ads, so a full sweep is
+// cheap; live campaigns get fresh spend/reach every cycle.
+
+const ADS_SYNC_INTERVAL_MS = parseInt(process.env.ADS_SYNC_INTERVAL_MS || '', 10) || 30 * 60 * 1000;
+const ADS_SYNC_ENABLED = process.env.ADS_SYNC_ENABLED !== 'false' && !!process.env.META_ACCESS_TOKEN;
+
+let adsCycleRunning = false;
+let lastFullAdsSync = 0;
+
+async function adsSyncTick(forceFull = false) {
+  if (adsCycleRunning) {
+    console.log('⏭️  Previous ads cycle still running — skipping.');
+    return;
+  }
+  adsCycleRunning = true;
+  const full = forceFull || Date.now() - lastFullAdsSync > 24 * 60 * 60 * 1000;
+  try {
+    const result = await runAdsCycle(supabase, { full });
+    if (full && !result.rateLimited) lastFullAdsSync = Date.now();
+    console.log(`💰 Ads ${full ? 'FULL' : 'active'} cycle: ${result.total} ads synced.`);
+  } catch (err) {
+    console.error('❌ Ads cycle error:', err.message);
+  } finally {
+    adsCycleRunning = false;
+  }
+}
+
+if (ADS_SYNC_ENABLED) {
+  // Boot: skip the daily full sweep for an hour so a redeploy doesn't
+  // immediately burn ad-account rate limit; incremental covers live ads.
+  lastFullAdsSync = Date.now() - 23 * 60 * 60 * 1000;
+  setInterval(() => adsSyncTick(), ADS_SYNC_INTERVAL_MS);
+  setTimeout(() => adsSyncTick(), 3 * 60 * 1000);   // first cycle 3 min after boot
+  console.log(`💰 Ads sync armed: every ${Math.round(ADS_SYNC_INTERVAL_MS / 60000)} min (first run in 3 min).`);
+} else {
+  console.log('💰 Ads sync disabled (missing META_ACCESS_TOKEN or ADS_SYNC_ENABLED=false).');
+}
+
 // ==================== WEBHOOK HANDLERS ====================
 
 async function handleEventWebhook(req, res) {
@@ -521,6 +563,12 @@ app.post('/webhook/:token/event',  checkWebhookSecurity, tokenGuard, handleEvent
 app.post('/webhook/:token/ig-sync-now', checkWebhookSecurity, tokenGuard, (req, res) => {
   res.status(200).json({ success: true, message: 'IG sync triggered' });
   setImmediate(igSyncTick);
+});
+
+// Manual trigger from the Mac app: refresh all ads right now.
+app.post('/webhook/:token/ads-sync-now', checkWebhookSecurity, tokenGuard, (req, res) => {
+  res.status(200).json({ success: true, message: 'Ads sync triggered' });
+  setImmediate(adsSyncTick);
 });
 
 // Full-resolution / playable URLs for one post's carousel children. Meta CDN
