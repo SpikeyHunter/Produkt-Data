@@ -643,6 +643,7 @@ app.post('/webhook/:token/booking-author', checkWebhookSecurity, tokenGuard, asy
       pageSample: req.body?.page_sample,
       networkSamples: req.body?.network_samples || [],
       selectedElements: req.body?.selected_elements || [],
+      recordedSteps: req.body?.recorded_steps || [],
       messages: req.body?.messages || [],
       currentRecipe: req.body?.current_recipe || null,
     }));
