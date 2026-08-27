@@ -542,6 +542,7 @@ app.post('/webhook/:token/ig-import', tokenGuard, async (req, res) => {
   try {
     const imported = await importMediaIds(supabase, ids);
     res.status(200).json({ success: true, imported });
+    setImmediate(igSyncTick);   // fetch insights for the fresh imports right away
   } catch (err) {
     console.error('❌ ig-import error:', err.message);
     res.status(500).json({ error: err.message });
