@@ -10,7 +10,7 @@ const { fetchAdsCatalog, countNewAds, importAds, refreshTrackedAds, fetchAdMedia
 const { generateProjectInsight, chatWithAnalyst } = require('./lib/ig-ai');
 const { scrapeSource, scrapeAll, fetchText } = require('./lib/booking-scraper');
 const { authorRecipe, proposeDetections, refineDetections,
-        analyseTicketPage } = require('./lib/booking-ai');
+        analyseTicketPage, draftFromCards } = require('./lib/booking-ai');
 const { pageSignature, recallPatterns } = require('./lib/booking-patterns');
 const { exploreSite } = require('./lib/booking-explore');
 
@@ -638,6 +638,27 @@ app.get('/webhook/:token/booking-page', tokenGuard, async (req, res) => {
     res.status(200).json({ html: html.slice(0, 400_000) });
   } catch (err) {
     res.status(200).json({ html: '', error: err.message });
+  }
+});
+
+// TRAINED DRAFT: the operator pointed at one event, the app matched every
+// block with the same structure, and these are those blocks. Read them.
+app.post('/webhook/:token/booking-draft', checkWebhookSecurity, tokenGuard, async (req, res) => {
+  try {
+    const cards = Array.isArray(req.body?.cards) ? req.body.cards.slice(0, 60) : [];
+    const result = await draftFromCards({
+      cards,
+      fields: req.body?.fields || {},
+      source: req.body?.source || {},
+      note: req.body?.note || '',
+      readFlyers: req.body?.read_flyers === true,
+    });
+    console.log(`🎓 booking-draft ${req.body?.source?.url || ''} → `
+      + `${cards.length} block(s) in, ${result.events.length} event(s) out`);
+    res.status(200).json(result);
+  } catch (err) {
+    console.error('❌ booking-draft error:', err.message);
+    res.status(500).json({ error: err.message });
   }
 });
 
