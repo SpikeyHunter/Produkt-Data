@@ -772,7 +772,7 @@ app.get('/webhook/:token/ai-status', tokenGuard, async (req, res) => {
     provider: anthropic ? 'anthropic' : (openai ? 'openai' : 'none'),
     assistant_model: anthropic ? (process.env.ANTHROPIC_MODEL || 'claude-sonnet-5') : 'gpt-4o-mini',
     extraction_model: anthropic
-      ? (process.env.BOOKING_EXTRACT_MODEL || 'claude-haiku-4-5-20251001')
+      ? (process.env.BOOKING_EXTRACT_MODEL || 'claude-haiku-4-5')
       : 'gpt-4o-mini',
     anthropic_key_present: anthropic,
     openai_key_present: openai,
