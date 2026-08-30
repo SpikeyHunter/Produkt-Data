@@ -38,7 +38,10 @@ const WEBHOOK_TOKEN = process.env.WEBHOOK_TOKEN ||
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 const TIXR_API_BASE_URL = 'https://studio.tixr.com';
 const app = express();
-app.use(express.json());
+// The Mac app posts whole rendered DOMs (booking-detect / booking-scrape in
+// browser mode) — a real page blows straight past Express's 100kb default and
+// comes back 413 before any handler runs.
+app.use(express.json({ limit: '12mb' }));
 
 // ================== SHARED HELPER FUNCTIONS ====================
 
