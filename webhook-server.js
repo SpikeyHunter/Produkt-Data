@@ -12,6 +12,7 @@ const { scrapeSource, scrapeAll, fetchText } = require('./lib/booking-scraper');
 const { authorRecipe, proposeDetections, refineDetections,
         analyseTicketPage } = require('./lib/booking-ai');
 const { pageSignature, recallPatterns } = require('./lib/booking-patterns');
+const { exploreSite } = require('./lib/booking-explore');
 
 console.log('🚀 Starting Tixr All-in-One Webhook Server...');
 
@@ -640,6 +641,26 @@ app.get('/webhook/:token/booking-page', tokenGuard, async (req, res) => {
   }
 });
 
+// EXPLORE: walk the site, find the pages where events actually live, run them
+// for real, and come back with the events split into live and past. The
+// operator confirms a result rather than a proposal.
+app.post('/webhook/:token/booking-explore', checkWebhookSecurity, tokenGuard, async (req, res) => {
+  const url = String(req.body?.url || '');
+  if (!/^https?:\/\//i.test(url)) return res.status(400).json({ error: 'valid url required' });
+  try {
+    const result = await exploreSite(supabase, {
+      url,
+      html: req.body?.rendered_html || null,
+    });
+    console.log(`🧭 booking-explore ${url} → ${result.sections.length} section(s), `
+      + `${result.live.length} live / ${result.past.length} past`);
+    res.status(200).json(result);
+  } catch (err) {
+    console.error('❌ booking-explore error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // PRE-DETECTION: look at a page cold and propose the detections it can see,
 // each proved with a real sample event. The operator confirms instead of
 // hand-building selectors. Prior recipes that worked on the same kind of site
@@ -719,6 +740,7 @@ app.post('/webhook/:token/booking-refine', checkWebhookSecurity, tokenGuard, asy
       events: req.body?.events || [],
       corrections: req.body?.corrections || [],
       rejected: req.body?.rejected || [],
+      missing: req.body?.missing || [],
       feedback: req.body?.feedback || '',
     });
     console.log(`✏️  booking-refine ${req.body?.url} → `
