@@ -9,7 +9,8 @@ const { runIgCycle, fetchCatalog, importMediaIds, fetchMediaChildren } = require
 const { fetchAdsCatalog, countNewAds, importAds, refreshTrackedAds, fetchAdMedia } = require('./lib/ads-sync');
 const { generateProjectInsight, chatWithAnalyst } = require('./lib/ig-ai');
 const { scrapeSource, scrapeAll, fetchText } = require('./lib/booking-scraper');
-const { authorRecipe, proposeDetections, refineDetections } = require('./lib/booking-ai');
+const { authorRecipe, proposeDetections, refineDetections,
+        analyseTicketPage } = require('./lib/booking-ai');
 const { pageSignature, recallPatterns } = require('./lib/booking-patterns');
 
 console.log('🚀 Starting Tixr All-in-One Webhook Server...');
@@ -670,6 +671,39 @@ app.post('/webhook/:token/booking-detect', checkWebhookSecurity, tokenGuard, asy
     res.status(200).json({ ...result, learned_from: patterns.length });
   } catch (err) {
     console.error('❌ booking-detect error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// The operator opened one event's ticket page (usually because the listing
+// showed no prices). Work out where the prices live and how the scraper gets
+// there every run, and hand back a patch for the detection.
+app.post('/webhook/:token/booking-ticket-page', checkWebhookSecurity, tokenGuard, async (req, res) => {
+  const url = String(req.body?.url || '');
+  try {
+    let html = String(req.body?.rendered_html || '');
+    if (html.length < 500) {
+      if (!/^https?:\/\//i.test(url)) return res.status(400).json({ error: 'valid url required' });
+      try { html = await fetchText(url); } catch (e) {
+        // Ticketing platforms routinely refuse the server. That IS the answer.
+        return res.status(200).json({
+          reply: `That ticket page refused a plain server request (${e.message}). Open it in the browser here and analyse again — I'll read what's on your screen, and this detection will need to sync from the app rather than the nightly job.`,
+          steps: [], found_prices: false, sample_tiers: [],
+          patch: { mode: 'browser', follow_links: true },
+        });
+      }
+    }
+    const result = await analyseTicketPage({
+      url,
+      html,
+      listingURL: req.body?.listing_url || '',
+      route: req.body?.route || {},
+    });
+    console.log(`🎟️  booking-ticket-page ${url} → prices: ${result.found_prices}, `
+      + `${(result.sample_tiers || []).length} tier(s)`);
+    res.status(200).json(result);
+  } catch (err) {
+    console.error('❌ booking-ticket-page error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
