@@ -9,7 +9,7 @@ const { runIgCycle, fetchCatalog, importMediaIds, fetchMediaChildren } = require
 const { fetchAdsCatalog, countNewAds, importAds, refreshTrackedAds, fetchAdMedia } = require('./lib/ads-sync');
 const { generateProjectInsight, chatWithAnalyst } = require('./lib/ig-ai');
 const { scrapeSource, scrapeAll, fetchText } = require('./lib/booking-scraper');
-const { authorRecipe, proposeDetections } = require('./lib/booking-ai');
+const { authorRecipe, proposeDetections, refineDetections } = require('./lib/booking-ai');
 const { pageSignature, recallPatterns } = require('./lib/booking-patterns');
 
 console.log('🚀 Starting Tixr All-in-One Webhook Server...');
@@ -670,6 +670,29 @@ app.post('/webhook/:token/booking-detect', checkWebhookSecurity, tokenGuard, asy
     res.status(200).json({ ...result, learned_from: patterns.length });
   } catch (err) {
     console.error('❌ booking-detect error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// The correction loop: the operator tested, marked up what came back wrong,
+// and the detections get rewritten from their corrections. This is where a
+// site is actually taught — the first analysis is only ever a first guess.
+app.post('/webhook/:token/booking-refine', checkWebhookSecurity, tokenGuard, async (req, res) => {
+  try {
+    const result = await refineDetections({
+      url: req.body?.url,
+      routes: req.body?.routes || [],
+      events: req.body?.events || [],
+      corrections: req.body?.corrections || [],
+      rejected: req.body?.rejected || [],
+      feedback: req.body?.feedback || '',
+    });
+    console.log(`✏️  booking-refine ${req.body?.url} → `
+      + `${(req.body?.corrections || []).length} correction(s), `
+      + `${(req.body?.rejected || []).length} rejected`);
+    res.status(200).json(result);
+  } catch (err) {
+    console.error('❌ booking-refine error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
