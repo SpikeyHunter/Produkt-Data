@@ -9,7 +9,8 @@ const { runIgCycle, fetchCatalog, importMediaIds, fetchMediaChildren } = require
 const { fetchAdsCatalog, countNewAds, importAds, refreshTrackedAds, fetchAdMedia } = require('./lib/ads-sync');
 const { generateProjectInsight, chatWithAnalyst } = require('./lib/ig-ai');
 const { scrapeSource, scrapeAll, fetchText } = require('./lib/booking-scraper');
-const { authorRecipe } = require('./lib/booking-ai');
+const { authorRecipe, proposeDetections } = require('./lib/booking-ai');
+const { pageSignature, recallPatterns } = require('./lib/booking-patterns');
 
 console.log('🚀 Starting Tixr All-in-One Webhook Server...');
 
@@ -632,6 +633,41 @@ app.get('/webhook/:token/booking-page', tokenGuard, async (req, res) => {
     res.status(200).json({ html: html.slice(0, 400_000) });
   } catch (err) {
     res.status(200).json({ html: '', error: err.message });
+  }
+});
+
+// PRE-DETECTION: look at a page cold and propose the detections it can see,
+// each proved with a real sample event. The operator confirms instead of
+// hand-building selectors. Prior recipes that worked on the same kind of site
+// go in as worked examples, so this gets better the more sites it has seen.
+app.post('/webhook/:token/booking-detect', checkWebhookSecurity, tokenGuard, async (req, res) => {
+  const url = String(req.body?.url || '');
+  try {
+    // The app's own rendered DOM is the truth about what the operator sees;
+    // fall back to a server fetch when it didn't send one.
+    let html = String(req.body?.rendered_html || '');
+    if (html.length < 500) {
+      if (!/^https?:\/\//i.test(url)) return res.status(400).json({ error: 'valid url required' });
+      try { html = await fetchText(url); } catch (e) {
+        return res.status(200).json({
+          detections: [],
+          reply: `I couldn't load that page from the server (${e.message}). Load it in the browser here and analyse again — I'll read what's on your screen.`,
+        });
+      }
+    }
+
+    const signature = pageSignature(html, url);
+    const patterns = await recallPatterns(supabase, signature);
+    const result = await proposeDetections({
+      url, html, signature, patterns, note: req.body?.note || '',
+    });
+
+    console.log(`🔎 booking-detect ${url} → ${signature.platform}, `
+      + `${result.detections.length} detection(s), ${patterns.length} pattern(s) recalled`);
+    res.status(200).json({ ...result, learned_from: patterns.length });
+  } catch (err) {
+    console.error('❌ booking-detect error:', err.message);
+    res.status(500).json({ error: err.message });
   }
 });
 
