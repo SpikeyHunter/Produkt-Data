@@ -670,6 +670,9 @@ app.post('/webhook/:token/events-sync', checkWebhookSecurity, tokenGuard, async 
     });
   }
 
+  // Venues that opted in by pasting a ticketing page.
+  await run('website', () => eventSync.enrichVenues(supabase, {}));
+
   // Pricing is a second pass on purpose: discovery costs two requests for the
   // whole city, the ladder costs one per ticketed event. Only forward windows
   // get priced — nobody needs the tier ladder of a show from last March.
@@ -683,6 +686,25 @@ app.post('/webhook/:token/events-sync', checkWebhookSecurity, tokenGuard, async 
   console.log(`🎪 events-sync ${window.from}..${window.to}: ${total} events across `
     + `${connectors.length} connector(s)`);
   res.status(200).json({ ok: connectors.some(c => c.ok !== false), window, connectors });
+});
+
+// Preview what a venue's own ticketing page would produce, without writing.
+// This is what the app's "Analyse" button calls, so the operator sees the
+// events before agreeing to add the page.
+app.post('/webhook/:token/venue-enrich', checkWebhookSecurity, tokenGuard, async (req, res) => {
+  try {
+    const result = await eventSync.enrichVenues(supabase, {
+      venueId: req.body?.venue_id || null,
+      dryRun: req.body?.dry_run !== false,
+      renderedHTML: req.body?.rendered_html || null,
+      readFlyers: typeof req.body?.read_flyers === 'boolean' ? req.body.read_flyers : null,
+    });
+    console.log(`🏛️  venue-enrich ${req.body?.venue_id || 'all'} → ${result.count} events`);
+    res.status(200).json(result);
+  } catch (err) {
+    console.error('❌ venue-enrich error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // ==================== EGRESS PROBE ====================
