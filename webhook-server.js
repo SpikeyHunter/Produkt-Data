@@ -14,6 +14,7 @@ const { authorRecipe, proposeDetections, refineDetections,
 const { pageSignature, recallPatterns } = require('./lib/booking-patterns');
 const { exploreSite } = require('./lib/booking-explore');
 const raClient = require('./lib/ra');
+const eventSync = require('./lib/event-sync');
 
 console.log('🚀 Starting Tixr All-in-One Webhook Server...');
 
@@ -625,6 +626,58 @@ app.get('/webhook/:token/ad-media', tokenGuard, async (req, res) => {
     console.error('❌ ad-media error:', err.message);
     res.status(500).json({ error: err.message });
   }
+});
+
+// ==================== EVENT INTELLIGENCE ====================
+//
+// The market board's one sync entry point. Each connector is a tier: RA for
+// discovery, evenko for its own rooms, and (when reachable) a pricing pass.
+// A connector that fails is reported and skipped rather than taking the whole
+// run down — losing evenko must never cost us RA.
+app.post('/webhook/:token/events-sync', checkWebhookSecurity, tokenGuard, async (req, res) => {
+  const days = Number.isFinite(req.body?.days) ? req.body.days : 120;
+  const want = Array.isArray(req.body?.sources) && req.body.sources.length
+    ? req.body.sources : null;
+  const window = eventSync.dateWindow(days);
+  const connectors = [];
+
+  const run = async (source, fn) => {
+    if (want && !want.includes(source)) return;
+    try {
+      connectors.push({ source, ...(await fn()) });
+    } catch (err) {
+      console.error(`❌ events-sync ${source}:`, err.message);
+      connectors.push({ source, ok: false, error: err.message.slice(0, 300) });
+    }
+  };
+
+  await run('ra', () => eventSync.syncRA(supabase, { ...window, watchlistOnly: true }));
+
+  // evenko is opt-out rather than opt-in now that it is approved, but the
+  // switch stays so it can be turned off without a deploy.
+  if (process.env.EVENKO_ENABLED !== 'false') {
+    await run('evenko', async () => {
+      const { syncEvenko } = require('./lib/event-sync');
+      if (typeof syncEvenko !== 'function') {
+        return { ok: false, error: 'evenko connector not built yet' };
+      }
+      return syncEvenko(supabase, { ...window });
+    });
+  }
+
+  // Pricing is a second pass on purpose: discovery costs two requests for the
+  // whole city, the ladder costs one per ticketed event. Only forward windows
+  // get priced — nobody needs the tier ladder of a show from last March.
+  if (days > 0 && req.body?.prices !== false) {
+    await run('prices', () => eventSync.priceRA(supabase, {
+      ...window, limit: Number(req.body?.price_limit) || 150,
+    }));
+  }
+
+  const total = connectors.reduce((n, c) => n + (c.inserted || 0) + (c.updated || 0), 0);
+  console.log(`🎪 events-sync ${window.from}..${window.to}: ${total} events across `
+    + `${connectors.length} connector(s)`);
+  res.status(200).json({ ok: connectors.some(c => c.ok !== false), window, connectors });
 });
 
 // ==================== EGRESS PROBE ====================
