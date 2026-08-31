@@ -811,6 +811,10 @@ app.post('/webhook/:token/booking-scrape', checkWebhookSecurity, tokenGuard, asy
     res.status(200).json(await scrapeSource(supabase, source, {
       renderedHTML: req.body?.rendered_html || null,
       dryRun: req.body?.dry_run === true,
+      // 'auto' runs the archive only when it is due; 'force' is the
+      // "Backfill now" action; 'skip' is upcoming-only.
+      backfill: ['auto', 'force', 'skip'].includes(req.body?.backfill)
+        ? req.body.backfill : 'auto',
     }));
   } catch (err) {
     console.error('❌ booking-scrape error:', err.message);
