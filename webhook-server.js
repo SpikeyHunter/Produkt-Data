@@ -13,6 +13,7 @@ const { authorRecipe, proposeDetections, refineDetections,
         analyseTicketPage, draftFromCards } = require('./lib/booking-ai');
 const { pageSignature, recallPatterns } = require('./lib/booking-patterns');
 const { exploreSite } = require('./lib/booking-explore');
+const raClient = require('./lib/ra');
 
 console.log('🚀 Starting Tixr All-in-One Webhook Server...');
 
@@ -624,6 +625,65 @@ app.get('/webhook/:token/ad-media', tokenGuard, async (req, res) => {
     console.error('❌ ad-media error:', err.message);
     res.status(500).json({ error: err.message });
   }
+});
+
+// ==================== EGRESS PROBE ====================
+//
+// Every source we verified was measured from a residential Montreal IP.
+// ra.co is Cloudflare bot-managed (a curl-like User-Agent gets a hard 403
+// from the same address that otherwise gets 200) and tixr.com runs DataDome.
+// Datacentre ASN reputation is a completely separate signal, and Render
+// egresses from shared AWS/GCP ranges.
+//
+// So this answers the one question that decides whether the source-first
+// rebuild is viable at all: does RA answer US, from production?
+app.get('/webhook/:token/probe-egress', tokenGuard, async (req, res) => {
+  const out = { checked_at: new Date().toISOString() };
+
+  try {
+    const ip = await axios.get('https://api.ipify.org', { timeout: 8000 });
+    out.render_egress_ip = ip.data;
+  } catch (err) { out.render_egress_ip = `unknown (${err.message})`; }
+
+  // Tier 1 — the load-bearing one.
+  try {
+    const started = Date.now();
+    const { events, total } = await raClient.listEvents({
+      areaId: 40, from: req.query.from || new Date().toISOString().slice(0, 10),
+      to: req.query.to || new Date(Date.now() + 14 * 86400000).toISOString().slice(0, 10),
+      pageSize: 20, maxPages: 1, log: () => {},
+    });
+    out.ra = {
+      ok: true, listings: total, events: events.length,
+      ms: Date.now() - started,
+      sample: events[0] ? `${events[0].date?.slice(0, 10)} ${events[0].venue?.name} — ${events[0].title}` : null,
+    };
+  } catch (err) {
+    out.ra = { ok: false, error: err.message.slice(0, 300) };
+  }
+
+  // Tier 2c — the short-link hop that yields a Tixr event id WITHOUT ever
+  // touching tixr.com, so DataDome is never in the path.
+  try {
+    const r = await axios.get('https://link.produkt.ca/26-r3', {
+      maxRedirects: 0, timeout: 10_000, validateStatus: () => true,
+    });
+    out.shortlink = { ok: r.status >= 300 && r.status < 400, status: r.status,
+                      location: r.headers?.location || null };
+  } catch (err) { out.shortlink = { ok: false, error: err.message.slice(0, 200) }; }
+
+  // Tier 2a — expected to fail. Recording it makes the failure evidence
+  // rather than folklore.
+  try {
+    const r = await axios.get('https://www.tixr.com/groups/thisishouse', {
+      timeout: 10_000, validateStatus: () => true,
+      headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) '
+        + 'AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36' },
+    });
+    out.tixr_public = { ok: r.status === 200, status: r.status };
+  } catch (err) { out.tixr_public = { ok: false, error: err.message.slice(0, 200) }; }
+
+  res.status(200).json(out);
 });
 
 // ==================== ARTIST AVAILABILITY (booking scraper) ====================
