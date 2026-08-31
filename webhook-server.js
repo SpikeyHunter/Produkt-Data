@@ -653,6 +653,11 @@ app.post('/webhook/:token/events-sync', checkWebhookSecurity, tokenGuard, async 
 
   await run('ra', () => eventSync.syncRA(supabase, { ...window, watchlistOnly: true }));
 
+  // Our own rooms come from our own events table. Deliberately a separate
+  // connector so nothing a third party publishes about a Produkt show can
+  // overwrite what we actually sold.
+  await run('internal', () => eventSync.syncInternal(supabase, { ...window }));
+
   // evenko is opt-out rather than opt-in now that it is approved, but the
   // switch stays so it can be turned off without a deploy.
   if (process.env.EVENKO_ENABLED !== 'false') {
